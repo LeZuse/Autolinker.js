@@ -1,28 +1,21 @@
-(function (root, factory) {
-  if (root && typeof define === 'function' && define.amd) {
-    // AMD. Register as an anonymous module unless amdModuleId is set
-    define([], function () {
-      return (root['Autolinker'] = factory());
-    });
-  } else if (typeof exports === 'object') {
-    // Node. Does not work with strict CommonJS, but
-    // only CommonJS-like environments that support module.exports,
-    // like Node.
-    module.exports = factory();
-  } else {
-    root['Autolinker'] = factory();
-  }
-}(this, function () {
-
 /*!
  * Autolinker.js
- * 0.17.1
+ * 0.25.1
  *
- * Copyright(c) 2015 Gregory Jacobs <greg@greg-jacobs.com>
- * MIT Licensed. http://www.opensource.org/licenses/mit-license.php
+ * Copyright(c) 2016 Gregory Jacobs <greg@greg-jacobs.com>
+ * MIT License
  *
  * https://github.com/gregjacobs/Autolinker.js
  */
+;(function(root, factory) {
+  if (typeof define === 'function' && define.amd) {
+    define([], factory);
+  } else if (typeof exports === 'object') {
+    module.exports = factory();
+  } else if (root) {
+    root.Autolinker = factory();
+  }
+}(this, function() {
 /**
  * @class Autolinker
  * @extends Object
@@ -45,8 +38,9 @@
  *     // produces: 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>'
  *
  *
- * The {@link #static-link static link()} method may also be used to inline options into a single call, which may
- * be more convenient for one-off uses. For example:
+ * The {@link #static-link static link()} method may also be used to inline
+ * options into a single call, which may be more convenient for one-off uses.
+ * For example:
  *
  *     var html = Autolinker.link( "Joe went to www.yahoo.com", {
  *         newWindow : false,
@@ -120,101 +114,168 @@
  *
  * The function may return the following values:
  *
- * - `true` (Boolean): Allow Autolinker to replace the match as it normally would.
+ * - `true` (Boolean): Allow Autolinker to replace the match as it normally
+ *   would.
  * - `false` (Boolean): Do not replace the current match at all - leave as-is.
- * - Any String: If a string is returned from the function, the string will be used directly as the replacement HTML for
- *   the match.
- * - An {@link Autolinker.HtmlTag} instance, which can be used to build/modify an HTML tag before writing out its HTML text.
+ * - Any String: If a string is returned from the function, the string will be
+ *   used directly as the replacement HTML for the match.
+ * - An {@link Autolinker.HtmlTag} instance, which can be used to build/modify
+ *   an HTML tag before writing out its HTML text.
  *
  * @constructor
- * @param {Object} [config] The configuration options for the Autolinker instance, specified in an Object (map).
+ * @param {Object} [cfg] The configuration options for the Autolinker instance,
+ *   specified in an Object (map).
  */
 var Autolinker = function( cfg ) {
-	Autolinker.Util.assign( this, cfg );  // assign the properties of `cfg` onto the Autolinker instance. Prototype properties will be used for missing configs.
+	cfg = cfg || {};
+
+	this.urls = this.normalizeUrlsCfg( cfg.urls );
+	this.email = typeof cfg.email === 'boolean' ? cfg.email : true;
+	this.twitter = typeof cfg.twitter === 'boolean' ? cfg.twitter : true;
+	this.phone = typeof cfg.phone === 'boolean' ? cfg.phone : true;
+	this.hashtag = cfg.hashtag || false;
+	this.newWindow = typeof cfg.newWindow === 'boolean' ? cfg.newWindow : true;
+	this.stripPrefix = typeof cfg.stripPrefix === 'boolean' ? cfg.stripPrefix : true;
 
 	// Validate the value of the `hashtag` cfg.
 	var hashtag = this.hashtag;
-	if( hashtag !== false && hashtag !== 'twitter' && hashtag !== 'facebook' ) {
+	if( hashtag !== false && hashtag !== 'twitter' && hashtag !== 'facebook' && hashtag !== 'instagram' ) {
 		throw new Error( "invalid `hashtag` cfg - see docs" );
 	}
+
+	this.truncate = this.normalizeTruncateCfg( cfg.truncate );
+	this.className = cfg.className || '';
+	this.replaceFn = cfg.replaceFn || null;
+
+	this.htmlParser = null;
+	this.matchers = null;
+	this.tagBuilder = null;
 };
 
 Autolinker.prototype = {
 	constructor : Autolinker,  // fix constructor property
 
 	/**
-	 * @cfg {Boolean} urls
+	 * @cfg {Boolean/Object} [urls=true]
 	 *
-	 * `true` if miscellaneous URLs should be automatically linked, `false` if they should not be.
+	 * `true` if URLs should be automatically linked, `false` if they should not
+	 * be.
+	 *
+	 * This option also accepts an Object form with 3 properties, to allow for
+	 * more customization of what exactly gets linked. All default to `true`:
+	 *
+	 * @param {Boolean} schemeMatches `true` to match URLs found prefixed with a
+	 *   scheme, i.e. `http://google.com`, or `other+scheme://google.com`,
+	 *   `false` to prevent these types of matches.
+	 * @param {Boolean} wwwMatches `true` to match urls found prefixed with
+	 *   `'www.'`, i.e. `www.google.com`. `false` to prevent these types of
+	 *   matches. Note that if the URL had a prefixed scheme, and
+	 *   `schemeMatches` is true, it will still be linked.
+	 * @param {Boolean} tldMatches `true` to match URLs with known top level
+	 *   domains (.com, .net, etc.) that are not prefixed with a scheme or
+	 *   `'www.'`. This option attempts to match anything that looks like a URL
+	 *   in the given text. Ex: `google.com`, `asdf.org/?page=1`, etc. `false`
+	 *   to prevent these types of matches.
 	 */
-	urls : true,
 
 	/**
-	 * @cfg {Boolean} email
+	 * @cfg {Boolean} [email=true]
 	 *
-	 * `true` if email addresses should be automatically linked, `false` if they should not be.
+	 * `true` if email addresses should be automatically linked, `false` if they
+	 * should not be.
 	 */
-	email : true,
 
 	/**
-	 * @cfg {Boolean} twitter
+	 * @cfg {Boolean} [twitter=true]
 	 *
-	 * `true` if Twitter handles ("@example") should be automatically linked, `false` if they should not be.
+	 * `true` if Twitter handles ("@example") should be automatically linked,
+	 * `false` if they should not be.
 	 */
-	twitter : true,
 
 	/**
-	 * @cfg {Boolean} phone
+	 * @cfg {Boolean} [phone=true]
 	 *
-	 * `true` if Phone numbers ("(555)555-5555") should be automatically linked, `false` if they should not be.
+	 * `true` if Phone numbers ("(555)555-5555") should be automatically linked,
+	 * `false` if they should not be.
 	 */
-	phone: true,
 
 	/**
-	 * @cfg {Boolean/String} hashtag
+	 * @cfg {Boolean/String} [hashtag=false]
 	 *
 	 * A string for the service name to have hashtags (ex: "#myHashtag")
 	 * auto-linked to. The currently-supported values are:
 	 *
 	 * - 'twitter'
 	 * - 'facebook'
+	 * - 'instagram'
 	 *
 	 * Pass `false` to skip auto-linking of hashtags.
 	 */
-	hashtag : false,
 
 	/**
-	 * @cfg {Boolean} newWindow
+	 * @cfg {Boolean} [newWindow=true]
 	 *
 	 * `true` if the links should open in a new window, `false` otherwise.
 	 */
-	newWindow : true,
 
 	/**
-	 * @cfg {Boolean} stripPrefix
+	 * @cfg {Boolean} [stripPrefix=true]
 	 *
 	 * `true` if 'http://' or 'https://' and/or the 'www.' should be stripped
 	 * from the beginning of URL links' text, `false` otherwise.
 	 */
-	stripPrefix : true,
 
 	/**
-	 * @cfg {Number} truncate
+	 * @cfg {Number/Object} truncate
 	 *
-	 * A number for how many characters long matched text should be truncated to inside the text of
-	 * a link. If the matched text is over this number of characters, it will be truncated to this length by
-	 * adding a two period ellipsis ('..') to the end of the string.
+	 * ## Number Form
 	 *
-	 * For example: A url like 'http://www.yahoo.com/some/long/path/to/a/file' truncated to 25 characters might look
-	 * something like this: 'yahoo.com/some/long/pat..'
+	 * A number for how many characters matched text should be truncated to
+	 * inside the text of a link. If the matched text is over this number of
+	 * characters, it will be truncated to this length by adding a two period
+	 * ellipsis ('..') to the end of the string.
+	 *
+	 * For example: A url like 'http://www.yahoo.com/some/long/path/to/a/file'
+	 * truncated to 25 characters might look something like this:
+	 * 'yahoo.com/some/long/pat..'
+	 *
+	 * Example Usage:
+	 *
+	 *     truncate: 25
+	 *
+	 *
+	 * ## Object Form
+	 *
+	 * An Object may also be provided with two properties: `length` (Number) and
+	 * `location` (String). `location` may be one of the following: 'end'
+	 * (default), 'middle', or 'smart'.
+	 *
+	 * Example Usage:
+	 *
+	 *     truncate: { length: 25, location: 'middle' }
+	 *
+	 * @cfg {Number} truncate.length How many characters to allow before
+	 *   truncation will occur.
+	 * @cfg {"end"/"middle"/"smart"} [truncate.location="end"]
+	 *
+	 * - 'end' (default): will truncate up to the number of characters, and then
+	 *   add an ellipsis at the end. Ex: 'yahoo.com/some/long/pat..'
+	 * - 'middle': will truncate and add the ellipsis in the middle. Ex:
+	 *   'yahoo.com/s..th/to/a/file'
+	 * - 'smart': for URLs where the algorithm attempts to strip out unnecessary
+	 *   parts first (such as the 'www.', then URL scheme, hash, etc.),
+	 *   attempting to make the URL human-readable before looking for a good
+	 *   point to insert the ellipsis if it is still too long. Ex:
+	 *   'yahoo.com/some..to/a/file'. For more details, see
+	 *   {@link Autolinker.truncate.TruncateSmart}.
 	 */
-	truncate : undefined,
 
 	/**
 	 * @cfg {String} className
 	 *
-	 * A CSS class name to add to the generated links. This class will be added to all links, as well as this class
-	 * plus match suffixes for styling url/email/phone/twitter/hashtag links differently.
+	 * A CSS class name to add to the generated links. This class will be added
+	 * to all links, as well as this class plus match suffixes for styling
+	 * url/email/phone/twitter/hashtag links differently.
 	 *
 	 * For example, if this config is provided as "myLink", then:
 	 *
@@ -224,7 +285,6 @@ Autolinker.prototype = {
 	 * - Phone links will have the CSS classes: "myLink myLink-phone"
 	 * - Hashtag links will have the CSS classes: "myLink myLink-hashtag"
 	 */
-	className : "",
 
 	/**
 	 * @cfg {Function} replaceFn
@@ -235,10 +295,13 @@ Autolinker.prototype = {
 	 *
 	 * This function is called with the following parameters:
 	 *
-	 * @cfg {Autolinker} replaceFn.autolinker The Autolinker instance, which may be used to retrieve child objects from (such
-	 *   as the instance's {@link #getTagBuilder tag builder}).
-	 * @cfg {Autolinker.match.Match} replaceFn.match The Match instance which can be used to retrieve information about the
-	 *   match that the `replaceFn` is currently processing. See {@link Autolinker.match.Match} subclasses for details.
+	 * @cfg {Autolinker} replaceFn.autolinker The Autolinker instance, which may
+	 *   be used to retrieve child objects from (such as the instance's
+	 *   {@link #getTagBuilder tag builder}).
+	 * @cfg {Autolinker.match.Match} replaceFn.match The Match instance which
+	 *   can be used to retrieve information about the match that the `replaceFn`
+	 *   is currently processing. See {@link Autolinker.match.Match} subclasses
+	 *   for details.
 	 */
 
 
@@ -246,28 +309,238 @@ Autolinker.prototype = {
 	 * @private
 	 * @property {Autolinker.htmlParser.HtmlParser} htmlParser
 	 *
-	 * The HtmlParser instance used to skip over HTML tags, while finding text nodes to process. This is lazily instantiated
-	 * in the {@link #getHtmlParser} method.
+	 * The HtmlParser instance used to skip over HTML tags, while finding text
+	 * nodes to process. This is lazily instantiated in the {@link #getHtmlParser}
+	 * method.
 	 */
-	htmlParser : undefined,
 
 	/**
 	 * @private
-	 * @property {Autolinker.matchParser.MatchParser} matchParser
+	 * @property {Autolinker.matcher.Matcher[]} matchers
 	 *
-	 * The MatchParser instance used to find matches in the text nodes of an input string passed to
-	 * {@link #link}. This is lazily instantiated in the {@link #getMatchParser} method.
+	 * The {@link Autolinker.matcher.Matcher} instances for this Autolinker
+	 * instance.
+	 *
+	 * This is lazily created in {@link #getMatchers}.
 	 */
-	matchParser : undefined,
 
 	/**
 	 * @private
 	 * @property {Autolinker.AnchorTagBuilder} tagBuilder
 	 *
-	 * The AnchorTagBuilder instance used to build match replacement anchor tags. Note: this is lazily instantiated
-	 * in the {@link #getTagBuilder} method.
+	 * The AnchorTagBuilder instance used to build match replacement anchor tags.
+	 * Note: this is lazily instantiated in the {@link #getTagBuilder} method.
 	 */
-	tagBuilder : undefined,
+
+
+	/**
+	 * Normalizes the {@link #urls} config into an Object with 3 properties:
+	 * `schemeMatches`, `wwwMatches`, and `tldMatches`, all Booleans.
+	 *
+	 * See {@link #urls} config for details.
+	 *
+	 * @private
+	 * @param {Boolean/Object} urls
+	 * @return {Object}
+	 */
+	normalizeUrlsCfg : function( urls ) {
+		if( urls == null ) urls = true;  // default to `true`
+
+		if( typeof urls === 'boolean' ) {
+			return { schemeMatches: urls, wwwMatches: urls, tldMatches: urls };
+
+		} else {  // object form
+			return {
+				schemeMatches : typeof urls.schemeMatches === 'boolean' ? urls.schemeMatches : true,
+				wwwMatches    : typeof urls.wwwMatches === 'boolean'    ? urls.wwwMatches    : true,
+				tldMatches    : typeof urls.tldMatches === 'boolean'    ? urls.tldMatches    : true
+			};
+		}
+	},
+
+
+	/**
+	 * Normalizes the {@link #truncate} config into an Object with 2 properties:
+	 * `length` (Number), and `location` (String).
+	 *
+	 * See {@link #truncate} config for details.
+	 *
+	 * @private
+	 * @param {Number/Object} truncate
+	 * @return {Object}
+	 */
+	normalizeTruncateCfg : function( truncate ) {
+		if( typeof truncate === 'number' ) {
+			return { length: truncate, location: 'end' };
+
+		} else {  // object, or undefined/null
+			return Autolinker.Util.defaults( truncate || {}, {
+				length   : Number.POSITIVE_INFINITY,
+				location : 'end'
+			} );
+		}
+	},
+
+
+	/**
+	 * Parses the input `textOrHtml` looking for URLs, email addresses, phone
+	 * numbers, username handles, and hashtags (depending on the configuration
+	 * of the Autolinker instance), and returns an array of {@link Autolinker.match.Match}
+	 * objects describing those matches.
+	 *
+	 * This method is used by the {@link #link} method, but can also be used to
+	 * simply do parsing of the input in order to discover what kinds of links
+	 * there are and how many.
+	 *
+	 * @param {String} textOrHtml The HTML or text to find matches within
+	 *   (depending on if the {@link #urls}, {@link #email}, {@link #phone},
+	 *   {@link #twitter}, and {@link #hashtag} options are enabled).
+	 * @return {Autolinker.match.Match[]} The array of Matches found in the
+	 *   given input `textOrHtml`.
+	 */
+	parse : function( textOrHtml ) {
+		var htmlParser = this.getHtmlParser(),
+		    htmlNodes = htmlParser.parse( textOrHtml ),
+		    anchorTagStackCount = 0,  // used to only process text around anchor tags, and any inner text/html they may have;
+		    matches = [];
+
+		// Find all matches within the `textOrHtml` (but not matches that are
+		// already nested within <a> tags)
+		for( var i = 0, len = htmlNodes.length; i < len; i++ ) {
+			var node = htmlNodes[ i ],
+			    nodeType = node.getType();
+
+			if( nodeType === 'element' && node.getTagName() === 'a' ) {  // Process HTML anchor element nodes in the input `textOrHtml` to find out when we're within an <a> tag
+				if( !node.isClosing() ) {  // it's the start <a> tag
+					anchorTagStackCount++;
+				} else {  // it's the end </a> tag
+					anchorTagStackCount = Math.max( anchorTagStackCount - 1, 0 );  // attempt to handle extraneous </a> tags by making sure the stack count never goes below 0
+				}
+
+			} else if( nodeType === 'text' && anchorTagStackCount === 0 ) {  // Process text nodes that are not within an <a> tag
+				var textNodeMatches = this.parseText( node.getText(), node.getOffset() );
+
+				matches.push.apply( matches, textNodeMatches );
+			}
+		}
+
+
+		// After we have found all matches, remove subsequent matches that
+		// overlap with a previous match. This can happen for instance with URLs,
+		// where the url 'google.com/#link' would match '#link' as a hashtag.
+		matches = this.compactMatches( matches );
+
+		// And finally, remove matches for match types that have been turned
+		// off. We needed to have all match types turned on initially so that
+		// things like hashtags could be filtered out if they were really just
+		// part of a URL match (for instance, as a named anchor).
+		matches = this.removeUnwantedMatches( matches );
+
+		return matches;
+	},
+
+
+	/**
+	 * After we have found all matches, we need to remove subsequent matches
+	 * that overlap with a previous match. This can happen for instance with
+	 * URLs, where the url 'google.com/#link' would match '#link' as a hashtag.
+	 *
+	 * @private
+	 * @param {Autolinker.match.Match[]} matches
+	 * @return {Autolinker.match.Match[]}
+	 */
+	compactMatches : function( matches ) {
+		// First, the matches need to be sorted in order of offset
+		matches.sort( function( a, b ) { return a.getOffset() - b.getOffset(); } );
+
+		for( var i = 0; i < matches.length - 1; i++ ) {
+			var match = matches[ i ],
+			    endIdx = match.getOffset() + match.getMatchedText().length;
+
+			// Remove subsequent matches that overlap with the current match
+			while( i + 1 < matches.length && matches[ i + 1 ].getOffset() <= endIdx ) {
+				matches.splice( i + 1, 1 );
+			}
+		}
+
+		return matches;
+	},
+
+
+	/**
+	 * Removes matches for matchers that were turned off in the options. For
+	 * example, if {@link #hashtag hashtags} were not to be matched, we'll
+	 * remove them from the `matches` array here.
+	 *
+	 * @private
+	 * @param {Autolinker.match.Match[]} matches The array of matches to remove
+	 *   the unwanted matches from. Note: this array is mutated for the
+	 *   removals.
+	 * @return {Autolinker.match.Match[]} The mutated input `matches` array.
+	 */
+	removeUnwantedMatches : function( matches ) {
+		var remove = Autolinker.Util.remove;
+
+		if( !this.hashtag ) remove( matches, function( match ) { return match.getType() === 'hashtag'; } );
+		if( !this.email )   remove( matches, function( match ) { return match.getType() === 'email'; } );
+		if( !this.phone )   remove( matches, function( match ) { return match.getType() === 'phone'; } );
+		if( !this.twitter ) remove( matches, function( match ) { return match.getType() === 'twitter'; } );
+		if( !this.urls.schemeMatches ) {
+			remove( matches, function( m ) { return m.getType() === 'url' && m.getUrlMatchType() === 'scheme'; } );
+		}
+		if( !this.urls.wwwMatches ) {
+			remove( matches, function( m ) { return m.getType() === 'url' && m.getUrlMatchType() === 'www'; } );
+		}
+		if( !this.urls.tldMatches ) {
+			remove( matches, function( m ) { return m.getType() === 'url' && m.getUrlMatchType() === 'tld'; } );
+		}
+
+		return matches;
+	},
+
+
+	/**
+	 * Parses the input `text` looking for URLs, email addresses, phone
+	 * numbers, username handles, and hashtags (depending on the configuration
+	 * of the Autolinker instance), and returns an array of {@link Autolinker.match.Match}
+	 * objects describing those matches.
+	 *
+	 * This method processes a **non-HTML string**, and is used to parse and
+	 * match within the text nodes of an HTML string. This method is used
+	 * internally by {@link #parse}.
+	 *
+	 * @private
+	 * @param {String} text The text to find matches within (depending on if the
+	 *   {@link #urls}, {@link #email}, {@link #phone}, {@link #twitter}, and
+	 *   {@link #hashtag} options are enabled). This must be a non-HTML string.
+	 * @param {Number} [offset=0] The offset of the text node within the
+	 *   original string. This is used when parsing with the {@link #parse}
+	 *   method to generate correct offsets within the {@link Autolinker.match.Match}
+	 *   instances, but may be omitted if calling this method publicly.
+	 * @return {Autolinker.match.Match[]} The array of Matches found in the
+	 *   given input `text`.
+	 */
+	parseText : function( text, offset ) {
+		offset = offset || 0;
+		var matchers = this.getMatchers(),
+		    matches = [];
+
+		for( var i = 0, numMatchers = matchers.length; i < numMatchers; i++ ) {
+			var textMatches = matchers[ i ].parseMatches( text );
+
+			// Correct the offset of each of the matches. They are originally
+			// the offset of the match within the provided text node, but we
+			// need to correct them to be relative to the original HTML input
+			// string (i.e. the one provided to #parse).
+			for( var j = 0, numTextMatches = textMatches.length; j < numTextMatches; j++ ) {
+				textMatches[ j ].setOffset( offset + textMatches[ j ].getOffset() );
+			}
+
+			matches.push.apply( matches, textMatches );
+		}
+		return matches;
+	},
+
 
 	/**
 	 * Automatically links URLs, Email addresses, Phone numbers, Twitter
@@ -291,74 +564,35 @@ Autolinker.prototype = {
 	link : function( textOrHtml ) {
 		if( !textOrHtml ) { return ""; }  // handle `null` and `undefined`
 
-		var htmlParser = this.getHtmlParser(),
-		    htmlNodes = htmlParser.parse( textOrHtml ),
-		    anchorTagStackCount = 0,  // used to only process text around anchor tags, and any inner text/html they may have
-		    resultHtml = [];
+		var matches = this.parse( textOrHtml ),
+			newHtml = [],
+			lastIndex = 0;
 
-		for( var i = 0, len = htmlNodes.length; i < len; i++ ) {
-			var node = htmlNodes[ i ],
-			    nodeType = node.getType(),
-			    nodeText = node.getText();
+		for( var i = 0, len = matches.length; i < len; i++ ) {
+			var match = matches[ i ];
 
-			if( nodeType === 'element' ) {
-				// Process HTML nodes in the input `textOrHtml`
-				if( node.getTagName() === 'a' ) {
-					if( !node.isClosing() ) {  // it's the start <a> tag
-						anchorTagStackCount++;
-					} else {   // it's the end </a> tag
-						anchorTagStackCount = Math.max( anchorTagStackCount - 1, 0 );  // attempt to handle extraneous </a> tags by making sure the stack count never goes below 0
-					}
-				}
-				resultHtml.push( nodeText );  // now add the text of the tag itself verbatim
+			newHtml.push( textOrHtml.substring( lastIndex, match.getOffset() ) );
+			newHtml.push( this.createMatchReturnVal( match ) );
 
-			} else if( nodeType === 'entity' || nodeType === 'comment' ) {
-				resultHtml.push( nodeText );  // append HTML entity nodes (such as '&nbsp;') or HTML comments (such as '<!-- Comment -->') verbatim
-
-			} else {
-				// Process text nodes in the input `textOrHtml`
-				if( anchorTagStackCount === 0 ) {
-					// If we're not within an <a> tag, process the text node to linkify
-					var linkifiedStr = this.linkifyStr( nodeText );
-					resultHtml.push( linkifiedStr );
-
-				} else {
-					// `text` is within an <a> tag, simply append the text - we do not want to autolink anything
-					// already within an <a>...</a> tag
-					resultHtml.push( nodeText );
-				}
-			}
+			lastIndex = match.getOffset() + match.getMatchedText().length;
 		}
+		newHtml.push( textOrHtml.substring( lastIndex ) );  // handle the text after the last match
 
-		return resultHtml.join( "" );
-	},
-
-	/**
-	 * Process the text that lies in between HTML tags, performing the anchor
-	 * tag replacements for the matches, and returns the string with the
-	 * replacements made.
-	 *
-	 * This method does the actual wrapping of matches with anchor tags.
-	 *
-	 * @private
-	 * @param {String} str The string of text to auto-link.
-	 * @return {String} The text with anchor tags auto-filled.
-	 */
-	linkifyStr : function( str ) {
-		return this.getMatchParser().replace( str, this.createMatchReturnVal, this );
+		return newHtml.join( '' );
 	},
 
 
 	/**
-	 * Creates the return string value for a given match in the input string,
-	 * for the {@link #linkifyStr} method.
+	 * Creates the return string value for a given match in the input string.
 	 *
 	 * This method handles the {@link #replaceFn}, if one was provided.
 	 *
 	 * @private
-	 * @param {Autolinker.match.Match} match The Match object that represents the match.
-	 * @return {String} The string that the `match` should be replaced with. This is usually the anchor tag string, but
-	 *   may be the `matchStr` itself if the match is not to be replaced.
+	 * @param {Autolinker.match.Match} match The Match object that represents
+	 *   the match.
+	 * @return {String} The string that the `match` should be replaced with.
+	 *   This is usually the anchor tag string, but may be the `matchStr` itself
+	 *   if the match is not to be replaced.
 	 */
 	createMatchReturnVal : function( match ) {
 		// Handle a custom `replaceFn` being provided
@@ -378,8 +612,7 @@ Autolinker.prototype = {
 
 		} else {  // replaceFnResult === true, or no/unknown return value from function
 			// Perform Autolinker's default anchor tag generation
-			var tagBuilder = this.getTagBuilder(),
-			    anchorTag = tagBuilder.build( match );  // returns an Autolinker.HtmlTag instance
+			var anchorTag = match.buildTag();  // returns an Autolinker.HtmlTag instance
 
 			return anchorTag.toAnchorString();
 		}
@@ -387,7 +620,8 @@ Autolinker.prototype = {
 
 
 	/**
-	 * Lazily instantiates and returns the {@link #htmlParser} instance for this Autolinker instance.
+	 * Lazily instantiates and returns the {@link #htmlParser} instance for this
+	 * Autolinker instance.
 	 *
 	 * @protected
 	 * @return {Autolinker.htmlParser.HtmlParser}
@@ -404,26 +638,30 @@ Autolinker.prototype = {
 
 
 	/**
-	 * Lazily instantiates and returns the {@link #matchParser} instance for this Autolinker instance.
+	 * Lazily instantiates and returns the {@link Autolinker.matcher.Matcher}
+	 * instances for this Autolinker instance.
 	 *
 	 * @protected
-	 * @return {Autolinker.matchParser.MatchParser}
+	 * @return {Autolinker.matcher.Matcher[]}
 	 */
-	getMatchParser : function() {
-		var matchParser = this.matchParser;
+	getMatchers : function() {
+		if( !this.matchers ) {
+			var matchersNs = Autolinker.matcher,
+			    tagBuilder = this.getTagBuilder();
 
-		if( !matchParser ) {
-			matchParser = this.matchParser = new Autolinker.matchParser.MatchParser( {
-				urls        : this.urls,
-				email       : this.email,
-				twitter     : this.twitter,
-				phone       : this.phone,
-				hashtag     : this.hashtag,
-				stripPrefix : this.stripPrefix
-			} );
+			var matchers = [
+				new matchersNs.Hashtag( { tagBuilder: tagBuilder, serviceName: this.hashtag } ),
+				new matchersNs.Email( { tagBuilder: tagBuilder } ),
+				new matchersNs.Phone( { tagBuilder: tagBuilder } ),
+				new matchersNs.Twitter( { tagBuilder: tagBuilder } ),
+				new matchersNs.Url( { tagBuilder: tagBuilder, stripPrefix: this.stripPrefix } )
+			];
+
+			return ( this.matchers = matchers );
+
+		} else {
+			return this.matchers;
 		}
-
-		return matchParser;
 	},
 
 
@@ -494,9 +732,11 @@ Autolinker.link = function( textOrHtml, options ) {
 
 
 // Autolinker Namespaces
+
 Autolinker.match = {};
+Autolinker.matcher = {};
 Autolinker.htmlParser = {};
-Autolinker.matchParser = {};
+Autolinker.truncate = {};
 
 /*global Autolinker */
 /*jshint eqnull:true, boss:true */
@@ -536,6 +776,25 @@ Autolinker.Util = {
 	assign : function( dest, src ) {
 		for( var prop in src ) {
 			if( src.hasOwnProperty( prop ) ) {
+				dest[ prop ] = src[ prop ];
+			}
+		}
+
+		return dest;
+	},
+
+
+	/**
+	 * Assigns (shallow copies) the properties of `src` onto `dest`, if the
+	 * corresponding property on `dest` === `undefined`.
+	 *
+	 * @param {Object} dest The destination object.
+	 * @param {Object} src The source object.
+	 * @return {Object} The destination object (`dest`)
+	 */
+	defaults : function( dest, src ) {
+		for( var prop in src ) {
+			if( src.hasOwnProperty( prop ) && dest[ prop ] === undefined ) {
 				dest[ prop ] = src[ prop ];
 			}
 		}
@@ -615,6 +874,28 @@ Autolinker.Util = {
 	},
 
 
+	/**
+	 * Removes array elements based on a filtering function. Mutates the input
+	 * array.
+	 *
+	 * Using this instead of the ES5 Array.prototype.filter() function, to allow
+	 * Autolinker compatibility with IE8, and also to prevent creating many new
+	 * arrays in memory for filtering.
+	 *
+	 * @param {Array} arr The array to remove elements from. This array is
+	 *   mutated.
+	 * @param {Function} fn A function which should return `true` to
+	 *   remove an element.
+	 * @return {Array} The mutated input `arr`.
+	 */
+	remove : function( arr, fn ) {
+		for( var i = arr.length - 1; i >= 0; i-- ) {
+			if( fn( arr[ i ] ) === true ) {
+				arr.splice( i, 1 );
+			}
+		}
+	},
+
 
 	/**
 	 * Performs the functionality of what modern browsers do when `String.prototype.split()` is called
@@ -640,7 +921,9 @@ Autolinker.Util = {
 	 * @return {String[]} The split array of strings, with the splitting character(s) included.
 	 */
 	splitAndCapture : function( str, splitRegex ) {
+		// @if DEBUG
 		if( !splitRegex.global ) throw new Error( "`splitRegex` must have the 'g' flag set" );
+		// @endif
 
 		var result = [],
 		    lastIdx = 0,
@@ -717,7 +1000,7 @@ Autolinker.Util = {
  *
  *     var html = Autolinker.link( "Test google.com", {
  *         replaceFn : function( autolinker, match ) {
- *             var tag = autolinker.getTagBuilder().build( match );  // returns an {@link Autolinker.HtmlTag} instance, configured with the Match's href and anchor text
+ *             var tag = match.buildTag();  // returns an {@link Autolinker.HtmlTag} instance, configured with the Match's href and anchor text
  *             tag.setAttr( 'rel', 'nofollow' );
  *
  *             return tag;
@@ -841,7 +1124,7 @@ Autolinker.HtmlTag = Autolinker.Util.extend( Object, {
 	/**
 	 * Retrieves an attribute from the HtmlTag. If the attribute does not exist, returns `undefined`.
 	 *
-	 * @param {String} name The attribute name to retrieve.
+	 * @param {String} attrName The attribute name to retrieve.
 	 * @return {String} The attribute's value, or `undefined` if it does not exist on the HtmlTag.
 	 */
 	getAttr : function( attrName ) {
@@ -1019,17 +1302,113 @@ Autolinker.HtmlTag = Autolinker.Util.extend( Object, {
 } );
 
 /*global Autolinker */
+/**
+ * @class Autolinker.RegexLib
+ * @singleton
+ *
+ * Builds and stores a library of the common regular expressions used by the
+ * Autolinker utility.
+ *
+ * Other regular expressions may exist ad-hoc, but these are generally the
+ * regular expressions that are shared between source files.
+ */
+Autolinker.RegexLib = (function() {
+
+	/**
+	 * The string form of a regular expression that would match all of the
+	 * alphabetic ("letter") chars in the unicode character set when placed in a
+	 * RegExp character class (`[]`). This includes all international alphabetic
+	 * characters.
+	 *
+	 * These would be the characters matched by unicode regex engines `\p{L}`
+	 * escape ("all letters").
+	 *
+	 * Taken from the XRegExp library: http://xregexp.com/
+	 * Specifically: http://xregexp.com/v/3.0.0/unicode-categories.js
+	 *
+	 * @private
+	 * @type {String}
+	 */
+	var alphaCharsStr = 'A-Za-z\\xAA\\xB5\\xBA\\xC0-\\xD6\\xD8-\\xF6\\xF8-\u02C1\u02C6-\u02D1\u02E0-\u02E4\u02EC\u02EE\u0370-\u0374\u0376\u0377\u037A-\u037D\u037F\u0386\u0388-\u038A\u038C\u038E-\u03A1\u03A3-\u03F5\u03F7-\u0481\u048A-\u052F\u0531-\u0556\u0559\u0561-\u0587\u05D0-\u05EA\u05F0-\u05F2\u0620-\u064A\u066E\u066F\u0671-\u06D3\u06D5\u06E5\u06E6\u06EE\u06EF\u06FA-\u06FC\u06FF\u0710\u0712-\u072F\u074D-\u07A5\u07B1\u07CA-\u07EA\u07F4\u07F5\u07FA\u0800-\u0815\u081A\u0824\u0828\u0840-\u0858\u08A0-\u08B4\u0904-\u0939\u093D\u0950\u0958-\u0961\u0971-\u0980\u0985-\u098C\u098F\u0990\u0993-\u09A8\u09AA-\u09B0\u09B2\u09B6-\u09B9\u09BD\u09CE\u09DC\u09DD\u09DF-\u09E1\u09F0\u09F1\u0A05-\u0A0A\u0A0F\u0A10\u0A13-\u0A28\u0A2A-\u0A30\u0A32\u0A33\u0A35\u0A36\u0A38\u0A39\u0A59-\u0A5C\u0A5E\u0A72-\u0A74\u0A85-\u0A8D\u0A8F-\u0A91\u0A93-\u0AA8\u0AAA-\u0AB0\u0AB2\u0AB3\u0AB5-\u0AB9\u0ABD\u0AD0\u0AE0\u0AE1\u0AF9\u0B05-\u0B0C\u0B0F\u0B10\u0B13-\u0B28\u0B2A-\u0B30\u0B32\u0B33\u0B35-\u0B39\u0B3D\u0B5C\u0B5D\u0B5F-\u0B61\u0B71\u0B83\u0B85-\u0B8A\u0B8E-\u0B90\u0B92-\u0B95\u0B99\u0B9A\u0B9C\u0B9E\u0B9F\u0BA3\u0BA4\u0BA8-\u0BAA\u0BAE-\u0BB9\u0BD0\u0C05-\u0C0C\u0C0E-\u0C10\u0C12-\u0C28\u0C2A-\u0C39\u0C3D\u0C58-\u0C5A\u0C60\u0C61\u0C85-\u0C8C\u0C8E-\u0C90\u0C92-\u0CA8\u0CAA-\u0CB3\u0CB5-\u0CB9\u0CBD\u0CDE\u0CE0\u0CE1\u0CF1\u0CF2\u0D05-\u0D0C\u0D0E-\u0D10\u0D12-\u0D3A\u0D3D\u0D4E\u0D5F-\u0D61\u0D7A-\u0D7F\u0D85-\u0D96\u0D9A-\u0DB1\u0DB3-\u0DBB\u0DBD\u0DC0-\u0DC6\u0E01-\u0E30\u0E32\u0E33\u0E40-\u0E46\u0E81\u0E82\u0E84\u0E87\u0E88\u0E8A\u0E8D\u0E94-\u0E97\u0E99-\u0E9F\u0EA1-\u0EA3\u0EA5\u0EA7\u0EAA\u0EAB\u0EAD-\u0EB0\u0EB2\u0EB3\u0EBD\u0EC0-\u0EC4\u0EC6\u0EDC-\u0EDF\u0F00\u0F40-\u0F47\u0F49-\u0F6C\u0F88-\u0F8C\u1000-\u102A\u103F\u1050-\u1055\u105A-\u105D\u1061\u1065\u1066\u106E-\u1070\u1075-\u1081\u108E\u10A0-\u10C5\u10C7\u10CD\u10D0-\u10FA\u10FC-\u1248\u124A-\u124D\u1250-\u1256\u1258\u125A-\u125D\u1260-\u1288\u128A-\u128D\u1290-\u12B0\u12B2-\u12B5\u12B8-\u12BE\u12C0\u12C2-\u12C5\u12C8-\u12D6\u12D8-\u1310\u1312-\u1315\u1318-\u135A\u1380-\u138F\u13A0-\u13F5\u13F8-\u13FD\u1401-\u166C\u166F-\u167F\u1681-\u169A\u16A0-\u16EA\u16F1-\u16F8\u1700-\u170C\u170E-\u1711\u1720-\u1731\u1740-\u1751\u1760-\u176C\u176E-\u1770\u1780-\u17B3\u17D7\u17DC\u1820-\u1877\u1880-\u18A8\u18AA\u18B0-\u18F5\u1900-\u191E\u1950-\u196D\u1970-\u1974\u1980-\u19AB\u19B0-\u19C9\u1A00-\u1A16\u1A20-\u1A54\u1AA7\u1B05-\u1B33\u1B45-\u1B4B\u1B83-\u1BA0\u1BAE\u1BAF\u1BBA-\u1BE5\u1C00-\u1C23\u1C4D-\u1C4F\u1C5A-\u1C7D\u1CE9-\u1CEC\u1CEE-\u1CF1\u1CF5\u1CF6\u1D00-\u1DBF\u1E00-\u1F15\u1F18-\u1F1D\u1F20-\u1F45\u1F48-\u1F4D\u1F50-\u1F57\u1F59\u1F5B\u1F5D\u1F5F-\u1F7D\u1F80-\u1FB4\u1FB6-\u1FBC\u1FBE\u1FC2-\u1FC4\u1FC6-\u1FCC\u1FD0-\u1FD3\u1FD6-\u1FDB\u1FE0-\u1FEC\u1FF2-\u1FF4\u1FF6-\u1FFC\u2071\u207F\u2090-\u209C\u2102\u2107\u210A-\u2113\u2115\u2119-\u211D\u2124\u2126\u2128\u212A-\u212D\u212F-\u2139\u213C-\u213F\u2145-\u2149\u214E\u2183\u2184\u2C00-\u2C2E\u2C30-\u2C5E\u2C60-\u2CE4\u2CEB-\u2CEE\u2CF2\u2CF3\u2D00-\u2D25\u2D27\u2D2D\u2D30-\u2D67\u2D6F\u2D80-\u2D96\u2DA0-\u2DA6\u2DA8-\u2DAE\u2DB0-\u2DB6\u2DB8-\u2DBE\u2DC0-\u2DC6\u2DC8-\u2DCE\u2DD0-\u2DD6\u2DD8-\u2DDE\u2E2F\u3005\u3006\u3031-\u3035\u303B\u303C\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3105-\u312D\u3131-\u318E\u31A0-\u31BA\u31F0-\u31FF\u3400-\u4DB5\u4E00-\u9FD5\uA000-\uA48C\uA4D0-\uA4FD\uA500-\uA60C\uA610-\uA61F\uA62A\uA62B\uA640-\uA66E\uA67F-\uA69D\uA6A0-\uA6E5\uA717-\uA71F\uA722-\uA788\uA78B-\uA7AD\uA7B0-\uA7B7\uA7F7-\uA801\uA803-\uA805\uA807-\uA80A\uA80C-\uA822\uA840-\uA873\uA882-\uA8B3\uA8F2-\uA8F7\uA8FB\uA8FD\uA90A-\uA925\uA930-\uA946\uA960-\uA97C\uA984-\uA9B2\uA9CF\uA9E0-\uA9E4\uA9E6-\uA9EF\uA9FA-\uA9FE\uAA00-\uAA28\uAA40-\uAA42\uAA44-\uAA4B\uAA60-\uAA76\uAA7A\uAA7E-\uAAAF\uAAB1\uAAB5\uAAB6\uAAB9-\uAABD\uAAC0\uAAC2\uAADB-\uAADD\uAAE0-\uAAEA\uAAF2-\uAAF4\uAB01-\uAB06\uAB09-\uAB0E\uAB11-\uAB16\uAB20-\uAB26\uAB28-\uAB2E\uAB30-\uAB5A\uAB5C-\uAB65\uAB70-\uABE2\uAC00-\uD7A3\uD7B0-\uD7C6\uD7CB-\uD7FB\uF900-\uFA6D\uFA70-\uFAD9\uFB00-\uFB06\uFB13-\uFB17\uFB1D\uFB1F-\uFB28\uFB2A-\uFB36\uFB38-\uFB3C\uFB3E\uFB40\uFB41\uFB43\uFB44\uFB46-\uFBB1\uFBD3-\uFD3D\uFD50-\uFD8F\uFD92-\uFDC7\uFDF0-\uFDFB\uFE70-\uFE74\uFE76-\uFEFC\uFF21-\uFF3A\uFF41-\uFF5A\uFF66-\uFFBE\uFFC2-\uFFC7\uFFCA-\uFFCF\uFFD2-\uFFD7\uFFDA-\uFFDC';
+
+	/**
+	 * The string form of a regular expression that would match all of the
+	 * decimal number chars in the unicode character set when placed in a RegExp
+	 * character class (`[]`).
+	 *
+	 * These would be the characters matched by unicode regex engines `\p{Nd}`
+	 * escape ("all decimal numbers")
+	 *
+	 * Taken from the XRegExp library: http://xregexp.com/
+	 * Specifically: http://xregexp.com/v/3.0.0/unicode-categories.js
+	 *
+	 * @private
+	 * @type {String}
+	 */
+	var decimalNumbersStr = '0-9\u0660-\u0669\u06F0-\u06F9\u07C0-\u07C9\u0966-\u096F\u09E6-\u09EF\u0A66-\u0A6F\u0AE6-\u0AEF\u0B66-\u0B6F\u0BE6-\u0BEF\u0C66-\u0C6F\u0CE6-\u0CEF\u0D66-\u0D6F\u0DE6-\u0DEF\u0E50-\u0E59\u0ED0-\u0ED9\u0F20-\u0F29\u1040-\u1049\u1090-\u1099\u17E0-\u17E9\u1810-\u1819\u1946-\u194F\u19D0-\u19D9\u1A80-\u1A89\u1A90-\u1A99\u1B50-\u1B59\u1BB0-\u1BB9\u1C40-\u1C49\u1C50-\u1C59\uA620-\uA629\uA8D0-\uA8D9\uA900-\uA909\uA9D0-\uA9D9\uA9F0-\uA9F9\uAA50-\uAA59\uABF0-\uABF9\uFF10-\uFF19';
+
+
+	// See documentation below
+	var alphaNumericCharsStr = alphaCharsStr + decimalNumbersStr;
+
+
+	// See documentation below
+	var domainNameRegex = new RegExp( '[' + alphaNumericCharsStr + '.\\-]*[' + alphaNumericCharsStr + '\\-]' );
+
+
+	// See documentation below
+	var tldRegex = /(?:international|construction|contractors|enterprises|photography|productions|foundation|immobilien|industries|management|properties|technology|christmas|community|directory|education|equipment|institute|marketing|solutions|vacations|bargains|boutique|builders|catering|cleaning|clothing|computer|democrat|diamonds|graphics|holdings|lighting|partners|plumbing|supplies|training|ventures|academy|careers|company|cruises|domains|exposed|flights|florist|gallery|guitars|holiday|kitchen|neustar|okinawa|recipes|rentals|reviews|shiksha|singles|support|systems|agency|berlin|camera|center|coffee|condos|dating|estate|events|expert|futbol|kaufen|luxury|maison|monash|museum|nagoya|photos|repair|report|social|supply|tattoo|tienda|travel|viajes|villas|vision|voting|voyage|actor|build|cards|cheap|codes|dance|email|glass|house|mango|ninja|parts|photo|press|shoes|solar|today|tokyo|tools|watch|works|aero|arpa|asia|best|bike|blue|buzz|camp|club|cool|coop|farm|fish|gift|guru|info|jobs|kiwi|kred|land|limo|link|menu|mobi|moda|name|pics|pink|post|qpon|rich|ruhr|sexy|tips|vote|voto|wang|wien|wiki|zone|bar|bid|biz|cab|cat|ceo|com|edu|gov|int|kim|mil|net|onl|org|pro|pub|red|tel|uno|wed|xxx|xyz|ac|ad|ae|af|ag|ai|al|am|an|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cw|cx|cy|cz|de|dj|dk|dm|do|dz|ec|ee|eg|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kp|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|me|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|rs|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|st|su|sv|sx|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tp|tr|tt|tv|tw|tz|ua|ug|uk|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|za|zm|zw)\b/;
+
+
+	return {
+
+		/**
+		 * The string form of a regular expression that would match all of the
+		 * letters and decimal number chars in the unicode character set when placed
+		 * in a RegExp character class (`[]`).
+		 *
+		 * These would be the characters matched by unicode regex engines `[\p{L}\p{Nd}]`
+		 * escape ("all letters and decimal numbers")
+		 *
+		 * @property {String} alphaNumericCharsStr
+		 */
+		alphaNumericCharsStr : alphaNumericCharsStr,
+
+		/**
+		 * A regular expression to match domain names of a URL or email address.
+		 * Ex: 'google', 'yahoo', 'some-other-company', etc.
+		 *
+		 * @property {RegExp} domainNameRegex
+		 */
+		domainNameRegex : domainNameRegex,
+
+		/**
+		 * A regular expression to match top level domains (TLDs) for a URL or
+		 * email address. Ex: 'com', 'org', 'net', etc.
+		 *
+		 * @property {RegExp} tldRegex
+		 */
+		tldRegex : tldRegex
+
+	};
+
+
+}() );
+/*global Autolinker */
 /*jshint sub:true */
 /**
  * @protected
  * @class Autolinker.AnchorTagBuilder
  * @extends Object
  *
- * Builds anchor (&lt;a&gt;) tags for the Autolinker utility when a match is found.
+ * Builds anchor (&lt;a&gt;) tags for the Autolinker utility when a match is
+ * found.
  *
- * Normally this class is instantiated, configured, and used internally by an {@link Autolinker} instance, but may
- * actually be retrieved in a {@link Autolinker#replaceFn replaceFn} to create {@link Autolinker.HtmlTag HtmlTag} instances
- * which may be modified before returning from the {@link Autolinker#replaceFn replaceFn}. For example:
+ * Normally this class is instantiated, configured, and used internally by an
+ * {@link Autolinker} instance, but may actually be retrieved in a {@link Autolinker#replaceFn replaceFn}
+ * to create {@link Autolinker.HtmlTag HtmlTag} instances which may be modified
+ * before returning from the {@link Autolinker#replaceFn replaceFn}. For
+ * example:
  *
  *     var html = Autolinker.link( "Test google.com", {
  *         replaceFn : function( autolinker, match ) {
@@ -1051,7 +1430,7 @@ Autolinker.AnchorTagBuilder = Autolinker.Util.extend( Object, {
 	 */
 
 	/**
-	 * @cfg {Number} truncate
+	 * @cfg {Object} truncate
 	 * @inheritdoc Autolinker#truncate
 	 */
 
@@ -1079,13 +1458,11 @@ Autolinker.AnchorTagBuilder = Autolinker.Util.extend( Object, {
 	 * @return {Autolinker.HtmlTag} The HtmlTag instance for the anchor tag.
 	 */
 	build : function( match ) {
-		var tag = new Autolinker.HtmlTag( {
+		return new Autolinker.HtmlTag( {
 			tagName   : 'a',
 			attrs     : this.createAttrs( match.getType(), match.getAnchorHref() ),
 			innerHtml : this.processAnchorText( match.getAnchorText() )
 		} );
-
-		return tag;
 	},
 
 
@@ -1096,7 +1473,7 @@ Autolinker.AnchorTagBuilder = Autolinker.Util.extend( Object, {
 	 * @protected
 	 * @param {"url"/"email"/"phone"/"twitter"/"hashtag"} matchType The type of
 	 *   match that an anchor tag is being generated for.
-	 * @param {String} href The href for the anchor tag.
+	 * @param {String} anchorHref The href for the anchor tag.
 	 * @return {Object} A key/value Object (map) of the anchor tag's attributes.
 	 */
 	createAttrs : function( matchType, anchorHref ) {
@@ -1110,6 +1487,7 @@ Autolinker.AnchorTagBuilder = Autolinker.Util.extend( Object, {
 		}
 		if( this.newWindow ) {
 			attrs[ 'target' ] = "_blank";
+			attrs[ 'rel' ] = "noopener noreferrer";
 		}
 
 		return attrs;
@@ -1154,23 +1532,38 @@ Autolinker.AnchorTagBuilder = Autolinker.Util.extend( Object, {
 
 
 	/**
-	 * Performs the truncation of the `anchorText`, if the `anchorText` is
-	 * longer than the {@link #truncate} option. Truncates the text to 2
-	 * characters fewer than the {@link #truncate} option, and adds ".." to the
-	 * end.
+	 * Performs the truncation of the `anchorText` based on the {@link #truncate}
+	 * option. If the `anchorText` is longer than the length specified by the
+	 * {@link #truncate} option, the truncation is performed based on the
+	 * `location` property. See {@link #truncate} for details.
 	 *
 	 * @private
-	 * @param {String} text The anchor tag's text (i.e. what will be displayed).
+	 * @param {String} anchorText The anchor tag's text (i.e. what will be
+	 *   displayed).
 	 * @return {String} The truncated anchor text.
 	 */
 	doTruncate : function( anchorText ) {
-		return Autolinker.Util.ellipsis( anchorText, this.truncate || Number.POSITIVE_INFINITY );
+		var truncate = this.truncate;
+		if( !truncate ) return anchorText;
+
+		var truncateLength = truncate.length,
+			truncateLocation = truncate.location;
+
+		if( truncateLocation === 'smart' ) {
+			return Autolinker.truncate.TruncateSmart( anchorText, truncateLength, '..' );
+
+		} else if( truncateLocation === 'middle' ) {
+			return Autolinker.truncate.TruncateMiddle( anchorText, truncateLength, '..' );
+
+		} else {
+			return Autolinker.truncate.TruncateEnd( anchorText, truncateLength, '..' );
+		}
 	}
 
 } );
+
 /*global Autolinker */
 /**
- * @private
  * @class Autolinker.htmlParser.HtmlParser
  * @extends Object
  *
@@ -1240,7 +1633,7 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 
 							// Zero or more attributes following the tag name
 							'(?:',
-								'\\s+',                // one or more whitespace chars before an attribute
+								'\\s*',                // any number of whitespace chars before an attribute
 								nameEqualsValueRegex,  // attr="value" (with optional ="value" part)
 							')*',
 
@@ -1283,22 +1676,23 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 			    commentText = currentResult[ 3 ], // if we've matched a comment
 			    tagName = currentResult[ 1 ] || currentResult[ 4 ],  // The <!DOCTYPE> tag (ex: "!DOCTYPE"), or another tag (ex: "a" or "img")
 			    isClosingTag = !!currentResult[ 2 ],
-			    inBetweenTagsText = html.substring( lastIndex, currentResult.index );
+			    offset = currentResult.index,
+			    inBetweenTagsText = html.substring( lastIndex, offset );
 
 			// Push TextNodes and EntityNodes for any text found between tags
 			if( inBetweenTagsText ) {
-				textAndEntityNodes = this.parseTextAndEntityNodes( inBetweenTagsText );
+				textAndEntityNodes = this.parseTextAndEntityNodes( lastIndex, inBetweenTagsText );
 				nodes.push.apply( nodes, textAndEntityNodes );
 			}
 
 			// Push the CommentNode or ElementNode
 			if( commentText ) {
-				nodes.push( this.createCommentNode( tagText, commentText ) );
+				nodes.push( this.createCommentNode( offset, tagText, commentText ) );
 			} else {
-				nodes.push( this.createElementNode( tagText, tagName, isClosingTag ) );
+				nodes.push( this.createElementNode( offset, tagText, tagName, isClosingTag ) );
 			}
 
-			lastIndex = currentResult.index + tagText.length;
+			lastIndex = offset + tagText.length;
 		}
 
 		// Process any remaining text after the last HTML element. Will process all of the text if there were no HTML elements.
@@ -1307,7 +1701,7 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 
 			// Push TextNodes and EntityNodes for any text found between tags
 			if( text ) {
-				textAndEntityNodes = this.parseTextAndEntityNodes( text );
+				textAndEntityNodes = this.parseTextAndEntityNodes( lastIndex, text );
 				nodes.push.apply( nodes, textAndEntityNodes );
 			}
 		}
@@ -1321,12 +1715,15 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 	 * should not have any HTML tags (elements) within it.
 	 *
 	 * @private
-	 * @param {String} text The text to parse.
+	 * @param {Number} offset The offset of the text node match within the
+	 *   original HTML string.
+	 * @param {String} text The string of text to parse. This is from an HTML
+	 *   text node.
 	 * @return {Autolinker.htmlParser.HtmlNode[]} An array of HtmlNodes to
 	 *   represent the {@link Autolinker.htmlParser.TextNode TextNodes} and
 	 *   {@link Autolinker.htmlParser.EntityNode EntityNodes} found.
 	 */
-	parseTextAndEntityNodes : function( text ) {
+	parseTextAndEntityNodes : function( offset, text ) {
 		var nodes = [],
 		    textAndEntityTokens = Autolinker.Util.splitAndCapture( text, this.htmlCharacterEntitiesRegex );  // split at HTML entities, but include the HTML entities in the results array
 
@@ -1337,8 +1734,14 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 			var textToken = textAndEntityTokens[ i ],
 			    entityToken = textAndEntityTokens[ i + 1 ];
 
-			if( textToken ) nodes.push( this.createTextNode( textToken ) );
-			if( entityToken ) nodes.push( this.createEntityNode( entityToken ) );
+			if( textToken ) {
+				nodes.push( this.createTextNode( offset, textToken ) );
+				offset += textToken.length;
+			}
+			if( entityToken ) {
+				nodes.push( this.createEntityNode( offset, entityToken ) );
+				offset += entityToken.length;
+			}
 		}
 		return nodes;
 	},
@@ -1348,13 +1751,16 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 	 * Factory method to create an {@link Autolinker.htmlParser.CommentNode CommentNode}.
 	 *
 	 * @private
+	 * @param {Number} offset The offset of the match within the original HTML
+	 *   string.
 	 * @param {String} tagText The full text of the tag (comment) that was
 	 *   matched, including its &lt;!-- and --&gt;.
-	 * @param {String} comment The full text of the comment that was matched.
+	 * @param {String} commentText The full text of the comment that was matched.
 	 */
-	createCommentNode : function( tagText, commentText ) {
+	createCommentNode : function( offset, tagText, commentText ) {
 		return new Autolinker.htmlParser.CommentNode( {
-			text: tagText,
+			offset : offset,
+			text   : tagText,
 			comment: Autolinker.Util.trim( commentText )
 		} );
 	},
@@ -1364,6 +1770,8 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 	 * Factory method to create an {@link Autolinker.htmlParser.ElementNode ElementNode}.
 	 *
 	 * @private
+	 * @param {Number} offset The offset of the match within the original HTML
+	 *   string.
 	 * @param {String} tagText The full text of the tag (element) that was
 	 *   matched, including its attributes.
 	 * @param {String} tagName The name of the tag. Ex: An &lt;img&gt; tag would
@@ -1372,8 +1780,9 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 	 *   otherwise.
 	 * @return {Autolinker.htmlParser.ElementNode}
 	 */
-	createElementNode : function( tagText, tagName, isClosingTag ) {
+	createElementNode : function( offset, tagText, tagName, isClosingTag ) {
 		return new Autolinker.htmlParser.ElementNode( {
+			offset  : offset,
 			text    : tagText,
 			tagName : tagName.toLowerCase(),
 			closing : isClosingTag
@@ -1385,12 +1794,14 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 	 * Factory method to create a {@link Autolinker.htmlParser.EntityNode EntityNode}.
 	 *
 	 * @private
+	 * @param {Number} offset The offset of the match within the original HTML
+	 *   string.
 	 * @param {String} text The text that was matched for the HTML entity (such
 	 *   as '&amp;nbsp;').
 	 * @return {Autolinker.htmlParser.EntityNode}
 	 */
-	createEntityNode : function( text ) {
-		return new Autolinker.htmlParser.EntityNode( { text: text } );
+	createEntityNode : function( offset, text ) {
+		return new Autolinker.htmlParser.EntityNode( { offset: offset, text: text } );
 	},
 
 
@@ -1398,11 +1809,13 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 	 * Factory method to create a {@link Autolinker.htmlParser.TextNode TextNode}.
 	 *
 	 * @private
+	 * @param {Number} offset The offset of the match within the original HTML
+	 *   string.
 	 * @param {String} text The text that was matched.
 	 * @return {Autolinker.htmlParser.TextNode}
 	 */
-	createTextNode : function( text ) {
-		return new Autolinker.htmlParser.TextNode( { text: text } );
+	createTextNode : function( offset, text ) {
+		return new Autolinker.htmlParser.TextNode( { offset: offset, text: text } );
 	}
 
 } );
@@ -1427,9 +1840,16 @@ Autolinker.htmlParser.HtmlParser = Autolinker.Util.extend( Object, {
 Autolinker.htmlParser.HtmlNode = Autolinker.Util.extend( Object, {
 
 	/**
+	 * @cfg {Number} offset (required)
+	 *
+	 * The offset of the HTML node in the original text that was parsed.
+	 */
+	offset : undefined,
+
+	/**
 	 * @cfg {String} text (required)
 	 *
-	 * The original text that was matched for the HtmlNode.
+	 * The text that was matched for the HtmlNode.
 	 *
 	 * - In the case of an {@link Autolinker.htmlParser.ElementNode ElementNode},
 	 *   this will be the tag's text.
@@ -1440,7 +1860,7 @@ Autolinker.htmlParser.HtmlNode = Autolinker.Util.extend( Object, {
 	 * - In the case of a {@link Autolinker.htmlParser.EntityNode EntityNode},
 	 *   this will be the text of the HTML entity.
 	 */
-	text : "",
+	text : undefined,
 
 
 	/**
@@ -1450,6 +1870,11 @@ Autolinker.htmlParser.HtmlNode = Autolinker.Util.extend( Object, {
 	 */
 	constructor : function( cfg ) {
 		Autolinker.Util.assign( this, cfg );
+
+		// @if DEBUG
+		if( this.offset == null ) throw new Error( '`offset` cfg required' );
+		if( this.text == null ) throw new Error( '`text` cfg required' );
+		// @endif
 	},
 
 
@@ -1460,6 +1885,17 @@ Autolinker.htmlParser.HtmlNode = Autolinker.Util.extend( Object, {
 	 * @return {String}
 	 */
 	getType : Autolinker.Util.abstractMethod,
+
+
+	/**
+	 * Retrieves the {@link #offset} of the HtmlNode. This is the offset of the
+	 * HTML node in the original string that was parsed.
+	 *
+	 * @return {Number}
+	 */
+	getOffset : function() {
+		return this.offset;
+	},
 
 
 	/**
@@ -1625,409 +2061,1270 @@ Autolinker.htmlParser.TextNode = Autolinker.Util.extend( Autolinker.htmlParser.H
 } );
 /*global Autolinker */
 /**
- * @private
- * @class Autolinker.matchParser.MatchParser
- * @extends Object
+ * @abstract
+ * @class Autolinker.match.Match
  *
- * Used by Autolinker to parse potential matches, given an input string of text.
+ * Represents a match found in an input string which should be Autolinked. A Match object is what is provided in a
+ * {@link Autolinker#replaceFn replaceFn}, and may be used to query for details about the match.
  *
- * The MatchParser is fed a non-HTML string in order to search for matches.
- * Autolinker first uses the {@link Autolinker.htmlParser.HtmlParser} to "walk
- * around" HTML tags, and then the text around the HTML tags is passed into the
- * MatchParser in order to find the actual matches.
+ * For example:
+ *
+ *     var input = "...";  // string with URLs, Email Addresses, and Twitter Handles
+ *
+ *     var linkedText = Autolinker.link( input, {
+ *         replaceFn : function( autolinker, match ) {
+ *             console.log( "href = ", match.getAnchorHref() );
+ *             console.log( "text = ", match.getAnchorText() );
+ *
+ *             switch( match.getType() ) {
+ *                 case 'url' :
+ *                     console.log( "url: ", match.getUrl() );
+ *
+ *                 case 'email' :
+ *                     console.log( "email: ", match.getEmail() );
+ *
+ *                 case 'twitter' :
+ *                     console.log( "twitter: ", match.getTwitterHandle() );
+ *             }
+ *         }
+ *     } );
+ *
+ * See the {@link Autolinker} class for more details on using the {@link Autolinker#replaceFn replaceFn}.
  */
-Autolinker.matchParser.MatchParser = Autolinker.Util.extend( Object, {
+Autolinker.match.Match = Autolinker.Util.extend( Object, {
 
 	/**
-	 * @cfg {Boolean} urls
-	 * @inheritdoc Autolinker#urls
+	 * @cfg {Autolinker.AnchorTagBuilder} tagBuilder (required)
+	 *
+	 * Reference to the AnchorTagBuilder instance to use to generate an anchor
+	 * tag for the Match.
 	 */
-	urls : true,
 
 	/**
-	 * @cfg {Boolean} email
-	 * @inheritdoc Autolinker#email
+	 * @cfg {String} matchedText (required)
+	 *
+	 * The original text that was matched by the {@link Autolinker.matcher.Matcher}.
 	 */
-	email : true,
 
 	/**
-	 * @cfg {Boolean} twitter
-	 * @inheritdoc Autolinker#twitter
+	 * @cfg {Number} offset (required)
+	 *
+	 * The offset of where the match was made in the input string.
 	 */
-	twitter : true,
+
 
 	/**
-	 * @cfg {Boolean} phone
-	 * @inheritdoc Autolinker#phone
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
 	 */
-	phone: true,
+	constructor : function( cfg ) {
+		// @if DEBUG
+		if( cfg.tagBuilder == null ) throw new Error( '`tagBuilder` cfg required' );
+		if( cfg.matchedText == null ) throw new Error( '`matchedText` cfg required' );
+		if( cfg.offset == null ) throw new Error( '`offset` cfg required' );
+		// @endif
+
+		this.tagBuilder = cfg.tagBuilder;
+		this.matchedText = cfg.matchedText;
+		this.offset = cfg.offset;
+	},
+
 
 	/**
-	 * @cfg {Boolean/String} hashtag
-	 * @inheritdoc Autolinker#hashtag
+	 * Returns a string name for the type of match that this class represents.
+	 *
+	 * @abstract
+	 * @return {String}
 	 */
-	hashtag : false,
+	getType : Autolinker.Util.abstractMethod,
+
 
 	/**
-	 * @cfg {Boolean} stripPrefix
+	 * Returns the original text that was matched.
+	 *
+	 * @return {String}
+	 */
+	getMatchedText : function() {
+		return this.matchedText;
+	},
+
+
+	/**
+	 * Sets the {@link #offset} of where the match was made in the input string.
+	 *
+	 * A {@link Autolinker.matcher.Matcher} will be fed only HTML text nodes,
+	 * and will therefore set an original offset that is relative to the HTML
+	 * text node itself. However, we want this offset to be relative to the full
+	 * HTML input string, and thus if using {@link Autolinker#parse} (rather
+	 * than calling a {@link Autolinker.matcher.Matcher} directly), then this
+	 * offset is corrected after the Matcher itself has done its job.
+	 *
+	 * @param {Number} offset
+	 */
+	setOffset : function( offset ) {
+		this.offset = offset;
+	},
+
+
+	/**
+	 * Returns the offset of where the match was made in the input string. This
+	 * is the 0-based index of the match.
+	 *
+	 * @return {Number}
+	 */
+	getOffset : function() {
+		return this.offset;
+	},
+
+
+	/**
+	 * Returns the anchor href that should be generated for the match.
+	 *
+	 * @abstract
+	 * @return {String}
+	 */
+	getAnchorHref : Autolinker.Util.abstractMethod,
+
+
+	/**
+	 * Returns the anchor text that should be generated for the match.
+	 *
+	 * @abstract
+	 * @return {String}
+	 */
+	getAnchorText : Autolinker.Util.abstractMethod,
+
+
+	/**
+	 * Builds and returns an {@link Autolinker.HtmlTag} instance based on the
+	 * Match.
+	 *
+	 * This can be used to easily generate anchor tags from matches, and either
+	 * return their HTML string, or modify them before doing so.
+	 *
+	 * Example Usage:
+	 *
+	 *     var tag = match.buildTag();
+	 *     tag.addClass( 'cordova-link' );
+	 *     tag.setAttr( 'target', '_system' );
+	 *
+	 *     tag.toAnchorString();  // <a href="http://google.com" class="cordova-link" target="_system">Google</a>
+	 */
+	buildTag : function() {
+		return this.tagBuilder.build( this );
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.match.Email
+ * @extends Autolinker.match.Match
+ *
+ * Represents a Email match found in an input string which should be Autolinked.
+ *
+ * See this class's superclass ({@link Autolinker.match.Match}) for more details.
+ */
+Autolinker.match.Email = Autolinker.Util.extend( Autolinker.match.Match, {
+
+	/**
+	 * @cfg {String} email (required)
+	 *
+	 * The email address that was matched.
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		if( !cfg.email ) throw new Error( '`email` cfg required' );
+		// @endif
+
+		this.email = cfg.email;
+	},
+
+
+	/**
+	 * Returns a string name for the type of match that this class represents.
+	 *
+	 * @return {String}
+	 */
+	getType : function() {
+		return 'email';
+	},
+
+
+	/**
+	 * Returns the email address that was matched.
+	 *
+	 * @return {String}
+	 */
+	getEmail : function() {
+		return this.email;
+	},
+
+
+	/**
+	 * Returns the anchor href that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorHref : function() {
+		return 'mailto:' + this.email;
+	},
+
+
+	/**
+	 * Returns the anchor text that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorText : function() {
+		return this.email;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.match.Hashtag
+ * @extends Autolinker.match.Match
+ *
+ * Represents a Hashtag match found in an input string which should be
+ * Autolinked.
+ *
+ * See this class's superclass ({@link Autolinker.match.Match}) for more
+ * details.
+ */
+Autolinker.match.Hashtag = Autolinker.Util.extend( Autolinker.match.Match, {
+
+	/**
+	 * @cfg {String} serviceName
+	 *
+	 * The service to point hashtag matches to. See {@link Autolinker#hashtag}
+	 * for available values.
+	 */
+
+	/**
+	 * @cfg {String} hashtag (required)
+	 *
+	 * The Hashtag that was matched, without the '#'.
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		// TODO: if( !serviceName ) throw new Error( '`serviceName` cfg required' );
+		if( !cfg.hashtag ) throw new Error( '`hashtag` cfg required' );
+		// @endif
+
+		this.serviceName = cfg.serviceName;
+		this.hashtag = cfg.hashtag;
+	},
+
+
+	/**
+	 * Returns the type of match that this class represents.
+	 *
+	 * @return {String}
+	 */
+	getType : function() {
+		return 'hashtag';
+	},
+
+
+	/**
+	 * Returns the configured {@link #serviceName} to point the Hashtag to.
+	 * Ex: 'facebook', 'twitter'.
+	 *
+	 * @return {String}
+	 */
+	getServiceName : function() {
+		return this.serviceName;
+	},
+
+
+	/**
+	 * Returns the matched hashtag, without the '#' character.
+	 *
+	 * @return {String}
+	 */
+	getHashtag : function() {
+		return this.hashtag;
+	},
+
+
+	/**
+	 * Returns the anchor href that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorHref : function() {
+		var serviceName = this.serviceName,
+		    hashtag = this.hashtag;
+
+		switch( serviceName ) {
+			case 'twitter' :
+				return 'https://twitter.com/hashtag/' + hashtag;
+			case 'facebook' :
+				return 'https://www.facebook.com/hashtag/' + hashtag;
+			case 'instagram' :
+				return 'https://instagram.com/explore/tags/' + hashtag;
+
+			default :  // Shouldn't happen because Autolinker's constructor should block any invalid values, but just in case.
+				throw new Error( 'Unknown service name to point hashtag to: ', serviceName );
+		}
+	},
+
+
+	/**
+	 * Returns the anchor text that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorText : function() {
+		return '#' + this.hashtag;
+	}
+
+} );
+
+/*global Autolinker */
+/**
+ * @class Autolinker.match.Phone
+ * @extends Autolinker.match.Match
+ *
+ * Represents a Phone number match found in an input string which should be
+ * Autolinked.
+ *
+ * See this class's superclass ({@link Autolinker.match.Match}) for more
+ * details.
+ */
+Autolinker.match.Phone = Autolinker.Util.extend( Autolinker.match.Match, {
+
+	/**
+	 * @protected
+	 * @property {String} number (required)
+	 *
+	 * The phone number that was matched, without any delimiter characters.
+	 *
+	 * Note: This is a string to allow for prefixed 0's.
+	 */
+
+	/**
+	 * @protected
+	 * @property  {Boolean} plusSign (required)
+	 *
+	 * `true` if the matched phone number started with a '+' sign. We'll include
+	 * it in the `tel:` URL if so, as this is needed for international numbers.
+	 *
+	 * Ex: '+1 (123) 456 7879'
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		if( !cfg.number ) throw new Error( '`number` cfg required' );
+		if( cfg.plusSign == null ) throw new Error( '`plusSign` cfg required' );
+		// @endif
+
+		this.number = cfg.number;
+		this.plusSign = cfg.plusSign;
+	},
+
+
+	/**
+	 * Returns a string name for the type of match that this class represents.
+	 *
+	 * @return {String}
+	 */
+	getType : function() {
+		return 'phone';
+	},
+
+
+	/**
+	 * Returns the phone number that was matched as a string, without any
+	 * delimiter characters.
+	 *
+	 * Note: This is a string to allow for prefixed 0's.
+	 *
+	 * @return {String}
+	 */
+	getNumber: function() {
+		return this.number;
+	},
+
+
+	/**
+	 * Returns the anchor href that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorHref : function() {
+		return 'tel:' + ( this.plusSign ? '+' : '' ) + this.number;
+	},
+
+
+	/**
+	 * Returns the anchor text that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorText : function() {
+		return this.matchedText;
+	}
+
+} );
+
+/*global Autolinker */
+/**
+ * @class Autolinker.match.Twitter
+ * @extends Autolinker.match.Match
+ *
+ * Represents a Twitter match found in an input string which should be Autolinked.
+ *
+ * See this class's superclass ({@link Autolinker.match.Match}) for more details.
+ */
+Autolinker.match.Twitter = Autolinker.Util.extend( Autolinker.match.Match, {
+
+	/**
+	 * @cfg {String} twitterHandle (required)
+	 *
+	 * The Twitter handle that was matched, without the '@' character.
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		if( !cfg.twitterHandle ) throw new Error( '`twitterHandle` cfg required' );
+		// @endif
+
+		this.twitterHandle = cfg.twitterHandle;
+	},
+
+
+	/**
+	 * Returns the type of match that this class represents.
+	 *
+	 * @return {String}
+	 */
+	getType : function() {
+		return 'twitter';
+	},
+
+
+	/**
+	 * Returns the twitter handle, without the '@' character.
+	 *
+	 * @return {String}
+	 */
+	getTwitterHandle : function() {
+		return this.twitterHandle;
+	},
+
+
+	/**
+	 * Returns the anchor href that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorHref : function() {
+		return 'https://twitter.com/' + this.twitterHandle;
+	},
+
+
+	/**
+	 * Returns the anchor text that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorText : function() {
+		return '@' + this.twitterHandle;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.match.Url
+ * @extends Autolinker.match.Match
+ *
+ * Represents a Url match found in an input string which should be Autolinked.
+ *
+ * See this class's superclass ({@link Autolinker.match.Match}) for more details.
+ */
+Autolinker.match.Url = Autolinker.Util.extend( Autolinker.match.Match, {
+
+	/**
+	 * @cfg {String} url (required)
+	 *
+	 * The url that was matched.
+	 */
+
+	/**
+	 * @cfg {"scheme"/"www"/"tld"} urlMatchType (required)
+	 *
+	 * The type of URL match that this class represents. This helps to determine
+	 * if the match was made in the original text with a prefixed scheme (ex:
+	 * 'http://www.google.com'), a prefixed 'www' (ex: 'www.google.com'), or
+	 * was matched by a known top-level domain (ex: 'google.com').
+	 */
+
+	/**
+	 * @cfg {Boolean} protocolUrlMatch (required)
+	 *
+	 * `true` if the URL is a match which already has a protocol (i.e.
+	 * 'http://'), `false` if the match was from a 'www' or known TLD match.
+	 */
+
+	/**
+	 * @cfg {Boolean} protocolRelativeMatch (required)
+	 *
+	 * `true` if the URL is a protocol-relative match. A protocol-relative match
+	 * is a URL that starts with '//', and will be either http:// or https://
+	 * based on the protocol that the site is loaded under.
+	 */
+
+	/**
+	 * @cfg {Boolean} stripPrefix (required)
+	 * @inheritdoc Autolinker#cfg-stripPrefix
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		if( cfg.urlMatchType !== 'scheme' && cfg.urlMatchType !== 'www' && cfg.urlMatchType !== 'tld' ) throw new Error( '`urlMatchType` cfg must be one of: "scheme", "www", or "tld"' );
+		if( !cfg.url ) throw new Error( '`url` cfg required' );
+		if( cfg.protocolUrlMatch == null ) throw new Error( '`protocolUrlMatch` cfg required' );
+		if( cfg.protocolRelativeMatch == null ) throw new Error( '`protocolRelativeMatch` cfg required' );
+		if( cfg.stripPrefix == null ) throw new Error( '`stripPrefix` cfg required' );
+		// @endif
+
+		this.urlMatchType = cfg.urlMatchType;
+		this.url = cfg.url;
+		this.protocolUrlMatch = cfg.protocolUrlMatch;
+		this.protocolRelativeMatch = cfg.protocolRelativeMatch;
+		this.stripPrefix = cfg.stripPrefix;
+	},
+
+
+	/**
+	 * @private
+	 * @property {RegExp} urlPrefixRegex
+	 *
+	 * A regular expression used to remove the 'http://' or 'https://' and/or the 'www.' from URLs.
+	 */
+	urlPrefixRegex: /^(https?:\/\/)?(www\.)?/i,
+
+	/**
+	 * @private
+	 * @property {RegExp} protocolRelativeRegex
+	 *
+	 * The regular expression used to remove the protocol-relative '//' from the {@link #url} string, for purposes
+	 * of {@link #getAnchorText}. A protocol-relative URL is, for example, "//yahoo.com"
+	 */
+	protocolRelativeRegex : /^\/\//,
+
+	/**
+	 * @private
+	 * @property {Boolean} protocolPrepended
+	 *
+	 * Will be set to `true` if the 'http://' protocol has been prepended to the {@link #url} (because the
+	 * {@link #url} did not have a protocol)
+	 */
+	protocolPrepended : false,
+
+
+	/**
+	 * Returns a string name for the type of match that this class represents.
+	 *
+	 * @return {String}
+	 */
+	getType : function() {
+		return 'url';
+	},
+
+
+	/**
+	 * Returns a string name for the type of URL match that this class
+	 * represents.
+	 *
+	 * This helps to determine if the match was made in the original text with a
+	 * prefixed scheme (ex: 'http://www.google.com'), a prefixed 'www' (ex:
+	 * 'www.google.com'), or was matched by a known top-level domain (ex:
+	 * 'google.com').
+	 *
+	 * @return {"scheme"/"www"/"tld"}
+	 */
+	getUrlMatchType : function() {
+		return this.urlMatchType;
+	},
+
+
+	/**
+	 * Returns the url that was matched, assuming the protocol to be 'http://' if the original
+	 * match was missing a protocol.
+	 *
+	 * @return {String}
+	 */
+	getUrl : function() {
+		var url = this.url;
+
+		// if the url string doesn't begin with a protocol, assume 'http://'
+		if( !this.protocolRelativeMatch && !this.protocolUrlMatch && !this.protocolPrepended ) {
+			url = this.url = 'http://' + url;
+
+			this.protocolPrepended = true;
+		}
+
+		return url;
+	},
+
+
+	/**
+	 * Returns the anchor href that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorHref : function() {
+		var url = this.getUrl();
+
+		return url.replace( /&amp;/g, '&' );  // any &amp;'s in the URL should be converted back to '&' if they were displayed as &amp; in the source html
+	},
+
+
+	/**
+	 * Returns the anchor text that should be generated for the match.
+	 *
+	 * @return {String}
+	 */
+	getAnchorText : function() {
+		var anchorText = this.getMatchedText();
+
+		if( this.protocolRelativeMatch ) {
+			// Strip off any protocol-relative '//' from the anchor text
+			anchorText = this.stripProtocolRelativePrefix( anchorText );
+		}
+		if( this.stripPrefix ) {
+			anchorText = this.stripUrlPrefix( anchorText );
+		}
+		anchorText = this.removeTrailingSlash( anchorText );  // remove trailing slash, if there is one
+
+		return anchorText;
+	},
+
+
+	// ---------------------------------------
+
+	// Utility Functionality
+
+	/**
+	 * Strips the URL prefix (such as "http://" or "https://") from the given text.
+	 *
+	 * @private
+	 * @param {String} text The text of the anchor that is being generated, for which to strip off the
+	 *   url prefix (such as stripping off "http://")
+	 * @return {String} The `anchorText`, with the prefix stripped.
+	 */
+	stripUrlPrefix : function( text ) {
+		return text.replace( this.urlPrefixRegex, '' );
+	},
+
+
+	/**
+	 * Strips any protocol-relative '//' from the anchor text.
+	 *
+	 * @private
+	 * @param {String} text The text of the anchor that is being generated, for which to strip off the
+	 *   protocol-relative prefix (such as stripping off "//")
+	 * @return {String} The `anchorText`, with the protocol-relative prefix stripped.
+	 */
+	stripProtocolRelativePrefix : function( text ) {
+		return text.replace( this.protocolRelativeRegex, '' );
+	},
+
+
+	/**
+	 * Removes any trailing slash from the given `anchorText`, in preparation for the text to be displayed.
+	 *
+	 * @private
+	 * @param {String} anchorText The text of the anchor that is being generated, for which to remove any trailing
+	 *   slash ('/') that may exist.
+	 * @return {String} The `anchorText`, with the trailing slash removed.
+	 */
+	removeTrailingSlash : function( anchorText ) {
+		if( anchorText.charAt( anchorText.length - 1 ) === '/' ) {
+			anchorText = anchorText.slice( 0, -1 );
+		}
+		return anchorText;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @abstract
+ * @class Autolinker.matcher.Matcher
+ *
+ * An abstract class and interface for individual matchers to find matches in
+ * an input string with linkified versions of them.
+ *
+ * Note that Matchers do not take HTML into account - they must be fed the text
+ * nodes of any HTML string, which is handled by {@link Autolinker#parse}.
+ */
+Autolinker.matcher.Matcher = Autolinker.Util.extend( Object, {
+
+	/**
+	 * @cfg {Autolinker.AnchorTagBuilder} tagBuilder (required)
+	 *
+	 * Reference to the AnchorTagBuilder instance to use to generate HTML tags
+	 * for {@link Autolinker.match.Match Matches}.
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Matcher
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		// @if DEBUG
+		if( !cfg.tagBuilder ) throw new Error( '`tagBuilder` cfg required' );
+		// @endif
+
+		this.tagBuilder = cfg.tagBuilder;
+	},
+
+
+	/**
+	 * Parses the input `text` and returns the array of {@link Autolinker.match.Match Matches}
+	 * for the matcher.
+	 *
+	 * @abstract
+	 * @param {String} text The text to scan and replace matches in.
+	 * @return {Autolinker.match.Match[]}
+	 */
+	parseMatches : Autolinker.Util.abstractMethod
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.matcher.Email
+ * @extends Autolinker.matcher.Matcher
+ *
+ * Matcher to find email matches in an input string.
+ *
+ * See this class's superclass ({@link Autolinker.matcher.Matcher}) for more details.
+ */
+Autolinker.matcher.Email = Autolinker.Util.extend( Autolinker.matcher.Matcher, {
+
+	/**
+	 * The regular expression to match email addresses. Example match:
+	 *
+	 *     person@place.com
+	 *
+	 * @private
+	 * @property {RegExp} matcherRegex
+	 */
+	matcherRegex : (function() {
+		var alphaNumericChars = Autolinker.RegexLib.alphaNumericCharsStr,
+		    emailRegex = new RegExp( '[' + alphaNumericChars + '\\-;:&=+$.,]+@' ),  // something@ for email addresses (a.k.a. local-part)
+			domainNameRegex = Autolinker.RegexLib.domainNameRegex,
+			tldRegex = Autolinker.RegexLib.tldRegex;  // match our known top level domains (TLDs)
+
+		return new RegExp( [
+			emailRegex.source,
+			domainNameRegex.source,
+			'\\.', tldRegex.source   // '.com', '.net', etc
+		].join( "" ), 'gi' );
+	} )(),
+
+
+	/**
+	 * @inheritdoc
+	 */
+	parseMatches : function( text ) {
+		var matcherRegex = this.matcherRegex,
+		    tagBuilder = this.tagBuilder,
+		    matches = [],
+		    match;
+
+		while( ( match = matcherRegex.exec( text ) ) !== null ) {
+			var matchedText = match[ 0 ];
+
+			matches.push( new Autolinker.match.Email( {
+				tagBuilder  : tagBuilder,
+				matchedText : matchedText,
+				offset      : match.index,
+				email       : matchedText
+			} ) );
+		}
+
+		return matches;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.matcher.Hashtag
+ * @extends Autolinker.matcher.Matcher
+ *
+ * Matcher to find Hashtag matches in an input string.
+ */
+Autolinker.matcher.Hashtag = Autolinker.Util.extend( Autolinker.matcher.Matcher, {
+
+	/**
+	 * @cfg {String} serviceName
+	 *
+	 * The service to point hashtag matches to. See {@link Autolinker#hashtag}
+	 * for available values.
+	 */
+
+
+	/**
+	 * The regular expression to match Hashtags. Example match:
+	 *
+	 *     #asdf
+	 *
+	 * @private
+	 * @property {RegExp} matcherRegex
+	 */
+	matcherRegex : new RegExp( '#[_' + Autolinker.RegexLib.alphaNumericCharsStr + ']{1,139}', 'g' ),
+
+	/**
+	 * The regular expression to use to check the character before a username match to
+	 * make sure we didn't accidentally match an email address.
+	 *
+	 * For example, the string "asdf@asdf.com" should not match "@asdf" as a username.
+	 *
+	 * @private
+	 * @property {RegExp} nonWordCharRegex
+	 */
+	nonWordCharRegex : new RegExp( '[^' + Autolinker.RegexLib.alphaNumericCharsStr + ']' ),
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match instance,
+	 *   specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.matcher.Matcher.prototype.constructor.call( this, cfg );
+
+		this.serviceName = cfg.serviceName;
+	},
+
+
+	/**
+	 * @inheritdoc
+	 */
+	parseMatches : function( text ) {
+		var matcherRegex = this.matcherRegex,
+		    nonWordCharRegex = this.nonWordCharRegex,
+		    serviceName = this.serviceName,
+		    tagBuilder = this.tagBuilder,
+		    matches = [],
+		    match;
+
+		while( ( match = matcherRegex.exec( text ) ) !== null ) {
+			var offset = match.index,
+			    prevChar = text.charAt( offset - 1 );
+
+			// If we found the match at the beginning of the string, or we found the match
+			// and there is a whitespace char in front of it (meaning it is not a '#' char
+			// in the middle of a word), then it is a hashtag match.
+			if( offset === 0 || nonWordCharRegex.test( prevChar ) ) {
+				var matchedText = match[ 0 ],
+				    hashtag = match[ 0 ].slice( 1 );  // strip off the '#' character at the beginning
+
+				matches.push( new Autolinker.match.Hashtag( {
+					tagBuilder  : tagBuilder,
+					matchedText : matchedText,
+					offset      : offset,
+					serviceName : serviceName,
+					hashtag     : hashtag
+				} ) );
+			}
+		}
+
+		return matches;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.matcher.Phone
+ * @extends Autolinker.matcher.Matcher
+ *
+ * Matcher to find Phone number matches in an input string.
+ *
+ * See this class's superclass ({@link Autolinker.matcher.Matcher}) for more
+ * details.
+ */
+Autolinker.matcher.Phone = Autolinker.Util.extend( Autolinker.matcher.Matcher, {
+
+	/**
+	 * The regular expression to match Phone numbers. Example match:
+	 *
+	 *     (123) 456-7890
+	 *
+	 * This regular expression has the following capturing groups:
+	 *
+	 * 1. The prefixed '+' sign, if there is one.
+	 *
+	 * @private
+	 * @property {RegExp} matcherRegex
+	 */
+	matcherRegex : /(?:(\+)?\d{1,3}[-\040.])?\(?\d{3}\)?[-\040.]?\d{3}[-\040.]\d{4}/g,  // ex: (123) 456-7890, 123 456 7890, 123-456-7890, etc.
+
+	/**
+	 * @inheritdoc
+	 */
+	parseMatches : function( text ) {
+		var matcherRegex = this.matcherRegex,
+		    tagBuilder = this.tagBuilder,
+		    matches = [],
+		    match;
+
+		while( ( match = matcherRegex.exec( text ) ) !== null ) {
+			// Remove non-numeric values from phone number string
+			var matchedText = match[ 0 ],
+			    cleanNumber = matchedText.replace( /\D/g, '' ),  // strip out non-digit characters
+			    plusSign = !!match[ 1 ];  // match[ 1 ] is the prefixed plus sign, if there is one
+
+			matches.push( new Autolinker.match.Phone( {
+				tagBuilder  : tagBuilder,
+				matchedText : matchedText,
+				offset      : match.index,
+				number      : cleanNumber,
+				plusSign    : plusSign
+			} ) );
+		}
+
+		return matches;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.matcher.Twitter
+ * @extends Autolinker.matcher.Matcher
+ *
+ * Matcher to find/replace username matches in an input string.
+ */
+Autolinker.matcher.Twitter = Autolinker.Util.extend( Autolinker.matcher.Matcher, {
+
+	/**
+	 * The regular expression to match username handles. Example match:
+	 *
+	 *     @asdf
+	 *
+	 * @private
+	 * @property {RegExp} matcherRegex
+	 */
+	matcherRegex : new RegExp( '@[_' + Autolinker.RegexLib.alphaNumericCharsStr + ']{1,20}', 'g' ),
+
+	/**
+	 * The regular expression to use to check the character before a username match to
+	 * make sure we didn't accidentally match an email address.
+	 *
+	 * For example, the string "asdf@asdf.com" should not match "@asdf" as a username.
+	 *
+	 * @private
+	 * @property {RegExp} nonWordCharRegex
+	 */
+	nonWordCharRegex : new RegExp( '[^' + Autolinker.RegexLib.alphaNumericCharsStr + ']' ),
+
+
+	/**
+	 * @inheritdoc
+	 */
+	parseMatches : function( text ) {
+		var matcherRegex = this.matcherRegex,
+		    nonWordCharRegex = this.nonWordCharRegex,
+		    tagBuilder = this.tagBuilder,
+		    matches = [],
+		    match;
+
+		while( ( match = matcherRegex.exec( text ) ) !== null ) {
+			var offset = match.index,
+			    prevChar = text.charAt( offset - 1 );
+
+			// If we found the match at the beginning of the string, or we found the match
+			// and there is a whitespace char in front of it (meaning it is not an email
+			// address), then it is a username match.
+			if( offset === 0 || nonWordCharRegex.test( prevChar ) ) {
+				var matchedText = match[ 0 ],
+				    twitterHandle = match[ 0 ].slice( 1 );  // strip off the '@' character at the beginning
+
+				matches.push( new Autolinker.match.Twitter( {
+					tagBuilder    : tagBuilder,
+					matchedText   : matchedText,
+					offset        : offset,
+					twitterHandle : twitterHandle
+				} ) );
+			}
+		}
+
+		return matches;
+	}
+
+} );
+/*global Autolinker */
+/**
+ * @class Autolinker.matcher.Url
+ * @extends Autolinker.matcher.Matcher
+ *
+ * Matcher to find URL matches in an input string.
+ *
+ * See this class's superclass ({@link Autolinker.matcher.Matcher}) for more details.
+ */
+Autolinker.matcher.Url = Autolinker.Util.extend( Autolinker.matcher.Matcher, {
+
+	/**
+	 * @cfg {Boolean} stripPrefix (required)
 	 * @inheritdoc Autolinker#stripPrefix
 	 */
-	stripPrefix : true,
 
 
 	/**
 	 * @private
 	 * @property {RegExp} matcherRegex
 	 *
-	 * The regular expression that matches URLs, email addresses, phone #s,
-	 * Twitter handles, and Hashtags.
+	 * The regular expression to match URLs with an optional scheme, port
+	 * number, path, query string, and hash anchor.
 	 *
-	 * This regular expression has the following capturing groups:
+	 * Example matches:
 	 *
-	 * 1.  Group that is used to determine if there is a Twitter handle match
-	 *     (i.e. \@someTwitterUser). Simply check for its existence to determine
-	 *     if there is a Twitter handle match. The next couple of capturing
-	 *     groups give information about the Twitter handle match.
-	 * 2.  The whitespace character before the \@sign in a Twitter handle. This
-	 *     is needed because there are no lookbehinds in JS regular expressions,
-	 *     and can be used to reconstruct the original string in a replace().
-	 * 3.  The Twitter handle itself in a Twitter match. If the match is
-	 *     '@someTwitterUser', the handle is 'someTwitterUser'.
-	 * 4.  Group that matches an email address. Used to determine if the match
-	 *     is an email address, as well as holding the full address. Ex:
-	 *     'me@my.com'
-	 * 5.  Group that matches a URL in the input text. Ex: 'http://google.com',
-	 *     'www.google.com', or just 'google.com'. This also includes a path,
-	 *     url parameters, or hash anchors. Ex: google.com/path/to/file?q1=1&q2=2#myAnchor
-	 * 6.  Group that matches a protocol URL (i.e. 'http://google.com'). This is
-	 *     used to match protocol URLs with just a single word, like 'http://localhost',
-	 *     where we won't double check that the domain name has at least one '.'
-	 *     in it.
-	 * 7.  A protocol-relative ('//') match for the case of a 'www.' prefixed
+	 *     http://google.com
+	 *     www.google.com
+	 *     google.com/path/to/file?q1=1&q2=2#myAnchor
+	 *
+	 *
+	 * This regular expression will have the following capturing groups:
+	 *
+	 * 1.  Group that matches a scheme-prefixed URL (i.e. 'http://google.com').
+	 *     This is used to match scheme URLs with just a single word, such as
+	 *     'http://localhost', where we won't double check that the domain name
+	 *     has at least one dot ('.') in it.
+	 * 2.  Group that matches a 'www.' prefixed URL. This is only matched if the
+	 *     'www.' text was not prefixed by a scheme (i.e.: not prefixed by
+	 *     'http://', 'ftp:', etc.)
+	 * 3.  A protocol-relative ('//') match for the case of a 'www.' prefixed
 	 *     URL. Will be an empty string if it is not a protocol-relative match.
 	 *     We need to know the character before the '//' in order to determine
 	 *     if it is a valid match or the // was in a string we don't want to
 	 *     auto-link.
-	 * 8.  A protocol-relative ('//') match for the case of a known TLD prefixed
+	 * 4.  Group that matches a known TLD (top level domain), when a scheme
+	 *     or 'www.'-prefixed domain is not matched.
+	 * 5.  A protocol-relative ('//') match for the case of a known TLD prefixed
 	 *     URL. Will be an empty string if it is not a protocol-relative match.
-	 *     See #6 for more info.
-	 * 9.  Group that is used to determine if there is a phone number match. The
-	 *     next 3 groups give segments of the phone number.
-	 * 10. Group that is used to determine if there is a Hashtag match
-	 *     (i.e. \#someHashtag). Simply check for its existence to determine if
-	 *     there is a Hashtag match. The next couple of capturing groups give
-	 *     information about the Hashtag match.
-	 * 11. The whitespace character before the #sign in a Hashtag handle. This
-	 *     is needed because there are no look-behinds in JS regular
-	 *     expressions, and can be used to reconstruct the original string in a
-	 *     replace().
-	 * 12. The Hashtag itself in a Hashtag match. If the match is
-	 *     '#someHashtag', the hashtag is 'someHashtag'.
+	 *     See #3 for more info.
 	 */
 	matcherRegex : (function() {
-		var twitterRegex = /(^|[^\w])@(\w{1,15})/,              // For matching a twitter handle. Ex: @gregory_jacobs
-
-		    hashtagRegex = /(^|[^\w])#(\w{1,15})/,              // For matching a Hashtag. Ex: #games
-
-		    emailRegex = /(?:[\-;:&=\+\$,\w\.]+@)/,             // something@ for email addresses (a.k.a. local-part)
-		    phoneRegex = /(?:\+?\d{1,3}[-\s.])?\(?\d{3}\)?[-\s.]?\d{3}[-\s.]\d{4}/,  // ex: (123) 456-7890, 123 456 7890, 123-456-7890, etc.
-		    protocolRegex = /(?:[A-Za-z][-.+A-Za-z0-9]+:(?![A-Za-z][-.+A-Za-z0-9]+:\/\/)(?!\d+\/?)(?:\/\/)?)/,  // match protocol, allow in format "http://" or "mailto:". However, do not match the first part of something like 'link:http://www.google.com' (i.e. don't match "link:"). Also, make sure we don't interpret 'google.com:8000' as if 'google.com' was a protocol here (i.e. ignore a trailing port number in this regex)
-		    wwwRegex = /(?:www\.)/,                             // starting with 'www.'
-		    domainNameRegex = /[A-Za-z0-9\.\-]*[A-Za-z0-9\-]/,  // anything looking at all like a domain, non-unicode domains, not ending in a period
-		    tldRegex = /\.(?:international|construction|contractors|enterprises|photography|productions|foundation|immobilien|industries|management|properties|technology|christmas|community|directory|education|equipment|institute|marketing|solutions|vacations|bargains|boutique|builders|catering|cleaning|clothing|computer|democrat|diamonds|graphics|holdings|lighting|partners|plumbing|supplies|training|ventures|academy|careers|company|cruises|domains|exposed|flights|florist|gallery|guitars|holiday|kitchen|neustar|okinawa|recipes|rentals|reviews|shiksha|singles|support|systems|agency|berlin|camera|center|coffee|condos|dating|estate|events|expert|futbol|kaufen|luxury|maison|monash|museum|nagoya|photos|repair|report|social|supply|tattoo|tienda|travel|viajes|villas|vision|voting|voyage|actor|build|cards|cheap|codes|dance|email|glass|house|mango|ninja|parts|photo|shoes|solar|today|tokyo|tools|watch|works|aero|arpa|asia|best|bike|blue|buzz|camp|club|cool|coop|farm|fish|gift|guru|info|jobs|kiwi|kred|land|limo|link|menu|mobi|moda|name|pics|pink|post|qpon|rich|ruhr|sexy|tips|vote|voto|wang|wien|wiki|zone|bar|bid|biz|cab|cat|ceo|com|edu|gov|int|kim|mil|net|onl|org|pro|pub|red|tel|uno|wed|xxx|xyz|ac|ad|ae|af|ag|ai|al|am|an|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cw|cx|cy|cz|de|dj|dk|dm|do|dz|ec|ee|eg|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kp|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|me|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|rs|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|st|su|sv|sx|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tp|tr|tt|tv|tw|tz|ua|ug|uk|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|za|zm|zw)\b/,   // match our known top level domains (TLDs)
+		var schemeRegex = /(?:[A-Za-z][-.+A-Za-z0-9]*:(?![A-Za-z][-.+A-Za-z0-9]*:\/\/)(?!\d+\/?)(?:\/\/)?)/,  // match protocol, allow in format "http://" or "mailto:". However, do not match the first part of something like 'link:http://www.google.com' (i.e. don't match "link:"). Also, make sure we don't interpret 'google.com:8000' as if 'google.com' was a protocol here (i.e. ignore a trailing port number in this regex)
+		    wwwRegex = /(?:www\.)/,                  // starting with 'www.'
+		    domainNameRegex = Autolinker.RegexLib.domainNameRegex,
+		    tldRegex = Autolinker.RegexLib.tldRegex,  // match our known top level domains (TLDs)
+		    alphaNumericCharsStr = Autolinker.RegexLib.alphaNumericCharsStr,
 
 		    // Allow optional path, query string, and hash anchor, not ending in the following characters: "?!:,.;"
 		    // http://blog.codinghorror.com/the-problem-with-urls/
-		    urlSuffixRegex = /[\-A-Za-z0-9+&@#\/%=~_()|'$*\[\]?!:,.;]*[\-A-Za-z0-9+&@#\/%=~_()|'$*\[\]]/;
+		    urlSuffixRegex = new RegExp( '[' + alphaNumericCharsStr + '\\-+&@#/%=~_()|\'$*\\[\\]?!:,.;]*[' + alphaNumericCharsStr + '\\-+&@#/%=~_()|\'$*\\[\\]]' );
 
 		return new RegExp( [
-			'(',  // *** Capturing group $1, which can be used to check for a twitter handle match. Use group $3 for the actual twitter handle though. $2 may be used to reconstruct the original string in a replace()
-				// *** Capturing group $2, which matches the whitespace character before the '@' sign (needed because of no lookbehinds), and
-				// *** Capturing group $3, which matches the actual twitter handle
-				twitterRegex.source,
-			')',
-
-			'|',
-
-			'(',  // *** Capturing group $4, which is used to determine an email match
-				emailRegex.source,
-				domainNameRegex.source,
-				tldRegex.source,
-			')',
-
-			'|',
-
-			'(',  // *** Capturing group $5, which is used to match a URL
-				'(?:', // parens to cover match for protocol (optional), and domain
-					'(',  // *** Capturing group $6, for a protocol-prefixed url (ex: http://google.com)
-						protocolRegex.source,
-						domainNameRegex.source,
-					')',
-
-					'|',
-
-					'(?:',  // non-capturing paren for a 'www.' prefixed url (ex: www.google.com)
-						'(.?//)?',  // *** Capturing group $7 for an optional protocol-relative URL. Must be at the beginning of the string or start with a non-word character
-						wwwRegex.source,
-						domainNameRegex.source,
-					')',
-
-					'|',
-
-					'(?:',  // non-capturing paren for known a TLD url (ex: google.com)
-						'(.?//)?',  // *** Capturing group $8 for an optional protocol-relative URL. Must be at the beginning of the string or start with a non-word character
-						domainNameRegex.source,
-						tldRegex.source,
-					')',
+			'(?:', // parens to cover match for scheme (optional), and domain
+				'(',  // *** Capturing group $1, for a scheme-prefixed url (ex: http://google.com)
+					schemeRegex.source,
+					domainNameRegex.source,
 				')',
 
-				'(?:' + urlSuffixRegex.source + ')?',  // match for path, query string, and/or hash anchor - optional
+				'|',
+
+				'(',  // *** Capturing group $2, for a 'www.' prefixed url (ex: www.google.com)
+					'(//)?',  // *** Capturing group $3 for an optional protocol-relative URL. Must be at the beginning of the string or start with a non-word character (handled later)
+					wwwRegex.source,
+					domainNameRegex.source,
+				')',
+
+				'|',
+
+				'(',  // *** Capturing group $4, for known a TLD url (ex: google.com)
+					'(//)?',  // *** Capturing group $5 for an optional protocol-relative URL. Must be at the beginning of the string or start with a non-word character (handled later)
+					domainNameRegex.source + '\\.',
+					tldRegex.source,
+				')',
 			')',
 
-			'|',
-
-			// this setup does not scale well for open extension :( Need to rethink design of autolinker...
-			// ***  Capturing group $9, which matches a (USA for now) phone number
-			'(',
-				phoneRegex.source,
-			')',
-
-			'|',
-
-			'(',  // *** Capturing group $10, which can be used to check for a Hashtag match. Use group $12 for the actual Hashtag though. $11 may be used to reconstruct the original string in a replace()
-				// *** Capturing group $11, which matches the whitespace character before the '#' sign (needed because of no lookbehinds), and
-				// *** Capturing group $12, which matches the actual Hashtag
-				hashtagRegex.source,
-			')'
+			'(?:' + urlSuffixRegex.source + ')?'  // match for path, query string, and/or hash anchor - optional
 		].join( "" ), 'gi' );
 	} )(),
 
-	/**
-	 * @private
-	 * @property {RegExp} charBeforeProtocolRelMatchRegex
-	 *
-	 * The regular expression used to retrieve the character before a
-	 * protocol-relative URL match.
-	 *
-	 * This is used in conjunction with the {@link #matcherRegex}, which needs
-	 * to grab the character before a protocol-relative '//' due to the lack of
-	 * a negative look-behind in JavaScript regular expressions. The character
-	 * before the match is stripped from the URL.
-	 */
-	charBeforeProtocolRelMatchRegex : /^(.)?\/\//,
 
 	/**
-	 * @private
-	 * @property {Autolinker.MatchValidator} matchValidator
+	 * A regular expression to use to check the character before a protocol-relative
+	 * URL match. We don't want to match a protocol-relative URL if it is part
+	 * of another word.
 	 *
-	 * The MatchValidator object, used to filter out any false positives from
-	 * the {@link #matcherRegex}. See {@link Autolinker.MatchValidator} for details.
+	 * For example, we want to match something like "Go to: //google.com",
+	 * but we don't want to match something like "abc//google.com"
+	 *
+	 * This regular expression is used to test the character before the '//'.
+	 *
+	 * @private
+	 * @type {RegExp} wordCharRegExp
 	 */
+	wordCharRegExp : /\w/,
+
+
+	/**
+	 * The regular expression to match opening parenthesis in a URL match.
+	 *
+	 * This is to determine if we have unbalanced parenthesis in the URL, and to
+	 * drop the final parenthesis that was matched if so.
+	 *
+	 * Ex: The text "(check out: wikipedia.com/something_(disambiguation))"
+	 * should only autolink the inner "wikipedia.com/something_(disambiguation)"
+	 * part, so if we find that we have unbalanced parenthesis, we will drop the
+	 * last one for the match.
+	 *
+	 * @private
+	 * @property {RegExp}
+	 */
+	openParensRe : /\(/g,
+
+	/**
+	 * The regular expression to match closing parenthesis in a URL match. See
+	 * {@link #openParensRe} for more information.
+	 *
+	 * @private
+	 * @property {RegExp}
+	 */
+	closeParensRe : /\)/g,
 
 
 	/**
 	 * @constructor
-	 * @param {Object} [cfg] The configuration options for the AnchorTagBuilder
-	 * instance, specified in an Object (map).
+	 * @param {Object} cfg The configuration properties for the Match instance,
+	 *   specified in an Object (map).
 	 */
 	constructor : function( cfg ) {
-		Autolinker.Util.assign( this, cfg );
+		Autolinker.matcher.Matcher.prototype.constructor.call( this, cfg );
 
-		this.matchValidator = new Autolinker.MatchValidator();
+		this.stripPrefix = cfg.stripPrefix;
+
+		// @if DEBUG
+		if( this.stripPrefix == null ) throw new Error( '`stripPrefix` cfg required' );
+		// @endif
 	},
 
 
 	/**
-	 * Parses the input `text` to search for matches, and calls the `replaceFn`
-	 * to allow replacements of the matches. Returns the `text` with matches
-	 * replaced.
-	 *
-	 * @param {String} text The text to search and repace matches in.
-	 * @param {Function} replaceFn The iterator function to handle the
-	 *   replacements. The function takes a single argument, a {@link Autolinker.match.Match}
-	 *   object, and should return the text that should make the replacement.
-	 * @param {Object} [contextObj=window] The context object ("scope") to run
-	 *   the `replaceFn` in.
-	 * @return {String}
+	 * @inheritdoc
 	 */
-	replace : function( text, replaceFn, contextObj ) {
-		var me = this;  // for closure
+	parseMatches : function( text ) {
+		var matcherRegex = this.matcherRegex,
+		    stripPrefix = this.stripPrefix,
+		    tagBuilder = this.tagBuilder,
+		    matches = [],
+		    match;
 
-		return text.replace( this.matcherRegex, function( matchStr, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 ) {
-			var matchDescObj = me.processCandidateMatch( matchStr, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 );  // "match description" object
+		while( ( match = matcherRegex.exec( text ) ) !== null ) {
+			var matchStr = match[ 0 ],
+			    schemeUrlMatch = match[ 1 ],
+			    wwwUrlMatch = match[ 2 ],
+			    wwwProtocolRelativeMatch = match[ 3 ],
+			    //tldUrlMatch = match[ 4 ],  -- not needed at the moment
+			    tldProtocolRelativeMatch = match[ 5 ],
+			    offset = match.index,
+			    protocolRelativeMatch = wwwProtocolRelativeMatch || tldProtocolRelativeMatch,
+				prevChar = text.charAt( offset - 1 );
 
-			// Return out with no changes for match types that are disabled (url,
-			// email, phone, etc.), or for matches that are invalid (false
-			// positives from the matcherRegex, which can't use look-behinds
-			// since they are unavailable in JS).
-			if( !matchDescObj ) {
-				return matchStr;
+			if( !Autolinker.matcher.UrlMatchValidator.isValid( matchStr, schemeUrlMatch ) ) {
+				continue;
+			}
 
+			// If the match is preceded by an '@' character, then it is either
+			// an email address or a username. Skip these types of matches.
+			if( offset > 0 && prevChar === '@' ) {
+				continue;
+			}
+
+			// If it's a protocol-relative '//' match, but the character before the '//'
+			// was a word character (i.e. a letter/number), then we found the '//' in the
+			// middle of another word (such as "asdf//asdf.com"). In this case, skip the
+			// match.
+			if( offset > 0 && protocolRelativeMatch && this.wordCharRegExp.test( prevChar ) ) {
+				continue;
+			}
+
+			// Handle a closing parenthesis at the end of the match, and exclude
+			// it if there is not a matching open parenthesis in the match
+			// itself.
+			if( this.matchHasUnbalancedClosingParen( matchStr ) ) {
+				matchStr = matchStr.substr( 0, matchStr.length - 1 );  // remove the trailing ")"
 			} else {
-				// Generate replacement text for the match from the `replaceFn`
-				var replaceStr = replaceFn.call( contextObj, matchDescObj.match );
-				return matchDescObj.prefixStr + replaceStr + matchDescObj.suffixStr;
-			}
-		} );
-	},
-
-
-	/**
-	 * Processes a candidate match from the {@link #matcherRegex}.
-	 *
-	 * Not all matches found by the regex are actual URL/Email/Phone/Twitter/Hashtag
-	 * matches, as determined by the {@link #matchValidator}. In this case, the
-	 * method returns `null`. Otherwise, a valid Object with `prefixStr`,
-	 * `match`, and `suffixStr` is returned.
-	 *
-	 * @private
-	 * @param {String} matchStr The full match that was found by the
-	 *   {@link #matcherRegex}.
-	 * @param {String} twitterMatch The matched text of a Twitter handle, if the
-	 *   match is a Twitter match.
-	 * @param {String} twitterHandlePrefixWhitespaceChar The whitespace char
-	 *   before the @ sign in a Twitter handle match. This is needed because of
-	 *   no lookbehinds in JS regexes, and is need to re-include the character
-	 *   for the anchor tag replacement.
-	 * @param {String} twitterHandle The actual Twitter user (i.e the word after
-	 *   the @ sign in a Twitter match).
-	 * @param {String} emailAddressMatch The matched email address for an email
-	 *   address match.
-	 * @param {String} urlMatch The matched URL string for a URL match.
-	 * @param {String} protocolUrlMatch The match URL string for a protocol
-	 *   match. Ex: 'http://yahoo.com'. This is used to match something like
-	 *   'http://localhost', where we won't double check that the domain name
-	 *   has at least one '.' in it.
-	 * @param {String} wwwProtocolRelativeMatch The '//' for a protocol-relative
-	 *   match from a 'www' url, with the character that comes before the '//'.
-	 * @param {String} tldProtocolRelativeMatch The '//' for a protocol-relative
-	 *   match from a TLD (top level domain) match, with the character that
-	 *   comes before the '//'.
-	 * @param {String} phoneMatch The matched text of a phone number
-	 * @param {String} hashtagMatch The matched text of a Twitter
-	 *   Hashtag, if the match is a Hashtag match.
-	 * @param {String} hashtagPrefixWhitespaceChar The whitespace char
-	 *   before the # sign in a Hashtag match. This is needed because of no
-	 *   lookbehinds in JS regexes, and is need to re-include the character for
-	 *   the anchor tag replacement.
-	 * @param {String} hashtag The actual Hashtag (i.e the word
-	 *   after the # sign in a Hashtag match).
-	 *
-	 * @return {Object} A "match description object". This will be `null` if the
-	 *   match was invalid, or if a match type is disabled. Otherwise, this will
-	 *   be an Object (map) with the following properties:
-	 * @return {String} return.prefixStr The char(s) that should be prepended to
-	 *   the replacement string. These are char(s) that were needed to be
-	 *   included from the regex match that were ignored by processing code, and
-	 *   should be re-inserted into the replacement stream.
-	 * @return {String} return.suffixStr The char(s) that should be appended to
-	 *   the replacement string. These are char(s) that were needed to be
-	 *   included from the regex match that were ignored by processing code, and
-	 *   should be re-inserted into the replacement stream.
-	 * @return {Autolinker.match.Match} return.match The Match object that
-	 *   represents the match that was found.
-	 */
-	processCandidateMatch : function(
-		matchStr, twitterMatch, twitterHandlePrefixWhitespaceChar, twitterHandle,
-		emailAddressMatch, urlMatch, protocolUrlMatch, wwwProtocolRelativeMatch,
-		tldProtocolRelativeMatch, phoneMatch, hashtagMatch,
-		hashtagPrefixWhitespaceChar, hashtag
-	) {
-		// Note: The `matchStr` variable wil be fixed up to remove characters that are no longer needed (which will
-		// be added to `prefixStr` and `suffixStr`).
-
-		var protocolRelativeMatch = wwwProtocolRelativeMatch || tldProtocolRelativeMatch,
-		    match,  // Will be an Autolinker.match.Match object
-
-		    prefixStr = "",  // A string to use to prefix the anchor tag that is created. This is needed for the Twitter and Hashtag matches.
-		    suffixStr = "";  // A string to suffix the anchor tag that is created. This is used if there is a trailing parenthesis that should not be auto-linked.
-
-		// Return out with `null` for match types that are disabled (url, email,
-		// twitter, hashtag), or for matches that are invalid (false positives
-		// from the matcherRegex, which can't use look-behinds since they are
-		// unavailable in JS).
-		if(
-			( urlMatch && !this.urls ) ||
-			( emailAddressMatch && !this.email ) ||
-			( phoneMatch && !this.phone ) ||
-			( twitterMatch && !this.twitter ) ||
-			( hashtagMatch && !this.hashtag ) ||
-			!this.matchValidator.isValidMatch( urlMatch, protocolUrlMatch, protocolRelativeMatch )
-		) {
-			return null;
-		}
-
-		// Handle a closing parenthesis at the end of the match, and exclude it
-		// if there is not a matching open parenthesis
-		// in the match itself.
-		if( this.matchHasUnbalancedClosingParen( matchStr ) ) {
-			matchStr = matchStr.substr( 0, matchStr.length - 1 );  // remove the trailing ")"
-			suffixStr = ")";  // this will be added after the generated <a> tag
-		}
-
-		if( emailAddressMatch ) {
-			match = new Autolinker.match.Email( { matchedText: matchStr, email: emailAddressMatch } );
-
-		} else if( twitterMatch ) {
-			// fix up the `matchStr` if there was a preceding whitespace char,
-			// which was needed to determine the match itself (since there are
-			// no look-behinds in JS regexes)
-			if( twitterHandlePrefixWhitespaceChar ) {
-				prefixStr = twitterHandlePrefixWhitespaceChar;
-				matchStr = matchStr.slice( 1 );  // remove the prefixed whitespace char from the match
-			}
-			match = new Autolinker.match.Twitter( { matchedText: matchStr, twitterHandle: twitterHandle } );
-
-		} else if( phoneMatch ) {
-			// remove non-numeric values from phone number string
-			var cleanNumber = matchStr.replace( /\D/g, '' );
- 			match = new Autolinker.match.Phone( { matchedText: matchStr, number: cleanNumber } );
-
-		} else if( hashtagMatch ) {
-			// fix up the `matchStr` if there was a preceding whitespace char,
-			// which was needed to determine the match itself (since there are
-			// no look-behinds in JS regexes)
-			if( hashtagPrefixWhitespaceChar ) {
-				prefixStr = hashtagPrefixWhitespaceChar;
-				matchStr = matchStr.slice( 1 );  // remove the prefixed whitespace char from the match
-			}
-			match = new Autolinker.match.Hashtag( { matchedText: matchStr, serviceName: this.hashtag, hashtag: hashtag } );
-
-		} else {  // url match
-			// If it's a protocol-relative '//' match, remove the character
-			// before the '//' (which the matcherRegex needed to match due to
-			// the lack of a negative look-behind in JavaScript regular
-			// expressions)
-			if( protocolRelativeMatch ) {
-				var charBeforeMatch = protocolRelativeMatch.match( this.charBeforeProtocolRelMatchRegex )[ 1 ] || "";
-
-				if( charBeforeMatch ) {  // fix up the `matchStr` if there was a preceding char before a protocol-relative match, which was needed to determine the match itself (since there are no look-behinds in JS regexes)
-					prefixStr = charBeforeMatch;
-					matchStr = matchStr.slice( 1 );  // remove the prefixed char from the match
+				// Handle an invalid character after the TLD
+				var pos = this.matchHasInvalidCharAfterTld( matchStr, schemeUrlMatch );
+				if( pos > -1 ) {
+					matchStr = matchStr.substr( 0, pos ); // remove the trailing invalid chars
 				}
 			}
 
-			match = new Autolinker.match.Url( {
-				matchedText : matchStr,
-				url : matchStr,
-				protocolUrlMatch : !!protocolUrlMatch,
+			var urlMatchType = schemeUrlMatch ? 'scheme' : ( wwwUrlMatch ? 'www' : 'tld' ),
+			    protocolUrlMatch = !!schemeUrlMatch;
+
+			matches.push( new Autolinker.match.Url( {
+				tagBuilder            : tagBuilder,
+				matchedText           : matchStr,
+				offset                : offset,
+				urlMatchType          : urlMatchType,
+				url                   : matchStr,
+				protocolUrlMatch      : protocolUrlMatch,
 				protocolRelativeMatch : !!protocolRelativeMatch,
-				stripPrefix : this.stripPrefix
-			} );
+				stripPrefix           : stripPrefix
+			} ) );
 		}
 
-		return {
-			prefixStr : prefixStr,
-			suffixStr : suffixStr,
-			match     : match
-		};
+		return matches;
 	},
 
 
 	/**
 	 * Determines if a match found has an unmatched closing parenthesis. If so,
 	 * this parenthesis will be removed from the match itself, and appended
-	 * after the generated anchor tag in {@link #processCandidateMatch}.
+	 * after the generated anchor tag.
 	 *
 	 * A match may have an extra closing parenthesis at the end of the match
 	 * because the regular expression must include parenthesis for URLs such as
@@ -2047,8 +3344,8 @@ Autolinker.matchParser.MatchParser = Autolinker.Util.extend( Object, {
 		var lastChar = matchStr.charAt( matchStr.length - 1 );
 
 		if( lastChar === ')' ) {
-			var openParensMatch = matchStr.match( /\(/g ),
-			    closeParensMatch = matchStr.match( /\)/g ),
+			var openParensMatch = matchStr.match( this.openParensRe ),
+			    closeParensMatch = matchStr.match( this.closeParensRe ),
 			    numOpenParens = ( openParensMatch && openParensMatch.length ) || 0,
 			    numCloseParens = ( closeParensMatch && closeParensMatch.length ) || 0;
 
@@ -2058,6 +3355,48 @@ Autolinker.matchParser.MatchParser = Autolinker.Util.extend( Object, {
 		}
 
 		return false;
+	},
+
+
+	/**
+	 * Determine if there's an invalid character after the TLD in a URL. Valid
+	 * characters after TLD are ':/?#'. Exclude scheme matched URLs from this
+	 * check.
+	 *
+	 * @private
+	 * @param {String} urlMatch The matched URL, if there was one. Will be an
+	 *   empty string if the match is not a URL match.
+	 * @param {String} schemeUrlMatch The match URL string for a scheme
+	 *   match. Ex: 'http://yahoo.com'. This is used to match something like
+	 *   'http://localhost', where we won't double check that the domain name
+	 *   has at least one '.' in it.
+	 * @return {Number} the position where the invalid character was found. If
+	 *   no such character was found, returns -1
+	 */
+	matchHasInvalidCharAfterTld : function( urlMatch, schemeUrlMatch ) {
+		if( !urlMatch ) {
+			return -1;
+		}
+
+		var offset = 0;
+		if ( schemeUrlMatch ) {
+			offset = urlMatch.indexOf(':');
+			urlMatch = urlMatch.slice(offset);
+		}
+
+		var re = /^((.?\/\/)?[A-Za-z0-9\u00C0-\u017F\.\-]*[A-Za-z0-9\u00C0-\u017F\-]\.[A-Za-z]+)/;
+		var res = re.exec( urlMatch );
+		if ( res === null ) {
+			return -1;
+		}
+
+		offset += res[1].length;
+		urlMatch = urlMatch.slice(res[1].length);
+		if (/^[^.A-Za-z:\/?#]/.test(urlMatch)) {
+			return offset;
+		}
+
+		return -1;
 	}
 
 } );
@@ -2065,37 +3404,19 @@ Autolinker.matchParser.MatchParser = Autolinker.Util.extend( Object, {
 /*jshint scripturl:true */
 /**
  * @private
- * @class Autolinker.MatchValidator
- * @extends Object
+ * @class Autolinker.matcher.UrlMatchValidator
+ * @singleton
  *
- * Used by Autolinker to filter out false positives from the
- * {@link Autolinker.matchParser.MatchParser#matcherRegex}.
+ * Used by Autolinker to filter out false URL positives from the
+ * {@link Autolinker.matcher.Url UrlMatcher}.
  *
  * Due to the limitations of regular expressions (including the missing feature
  * of look-behinds in JS regular expressions), we cannot always determine the
  * validity of a given match. This class applies a bit of additional logic to
  * filter out any false positives that have been matched by the
- * {@link Autolinker.matchParser.MatchParser#matcherRegex}.
+ * {@link Autolinker.matcher.Url UrlMatcher}.
  */
-Autolinker.MatchValidator = Autolinker.Util.extend( Object, {
-
-	/**
-	 * @private
-	 * @property {RegExp} invalidProtocolRelMatchRegex
-	 *
-	 * The regular expression used to check a potential protocol-relative URL
-	 * match, coming from the {@link Autolinker.matchParser.MatchParser#matcherRegex}.
-	 * A protocol-relative URL is, for example, "//yahoo.com"
-	 *
-	 * This regular expression checks to see if there is a word character before
-	 * the '//' match in order to determine if we should actually autolink a
-	 * protocol-relative URL. This is needed because there is no negative
-	 * look-behind in JavaScript regular expressions.
-	 *
-	 * For instance, we want to autolink something like "Go to: //google.com",
-	 * but we don't want to autolink something like "abc//google.com"
-	 */
-	invalidProtocolRelMatchRegex : /^[\w]\/\//,
+Autolinker.matcher.UrlMatchValidator = {
 
 	/**
 	 * Regex to test for a full protocol, with the two trailing slashes. Ex: 'http://'
@@ -2103,7 +3424,7 @@ Autolinker.MatchValidator = Autolinker.Util.extend( Object, {
 	 * @private
 	 * @property {RegExp} hasFullProtocolRegex
 	 */
-	hasFullProtocolRegex : /^[A-Za-z][-.+A-Za-z0-9]+:\/\//,
+	hasFullProtocolRegex : /^[A-Za-z][-.+A-Za-z0-9]*:\/\//,
 
 	/**
 	 * Regex to find the URI scheme, such as 'mailto:'.
@@ -2113,7 +3434,7 @@ Autolinker.MatchValidator = Autolinker.Util.extend( Object, {
 	 * @private
 	 * @property {RegExp} uriSchemeRegex
 	 */
-	uriSchemeRegex : /^[A-Za-z][-.+A-Za-z0-9]+:/,
+	uriSchemeRegex : /^[A-Za-z][-.+A-Za-z0-9]*:/,
 
 	/**
 	 * Regex to determine if at least one word char exists after the protocol (i.e. after the ':')
@@ -2121,11 +3442,11 @@ Autolinker.MatchValidator = Autolinker.Util.extend( Object, {
 	 * @private
 	 * @property {RegExp} hasWordCharAfterProtocolRegex
 	 */
-	hasWordCharAfterProtocolRegex : /:[^\s]*?[A-Za-z]/,
+	hasWordCharAfterProtocolRegex : /:[^\s]*?[A-Za-z\u00C0-\u017F]/,
 
 
 	/**
-	 * Determines if a given match found by the {@link Autolinker.matchParser.MatchParser}
+	 * Determines if a given URL match found by the {@link Autolinker.matcher.Url UrlMatcher}
 	 * is valid. Will return `false` for:
 	 *
 	 * 1) URL matches which do not have at least have one period ('.') in the
@@ -2145,20 +3466,15 @@ Autolinker.MatchValidator = Autolinker.Util.extend( Object, {
 	 *   match. Ex: 'http://yahoo.com'. This is used to match something like
 	 *   'http://localhost', where we won't double check that the domain name
 	 *   has at least one '.' in it.
-	 * @param {String} protocolRelativeMatch The protocol-relative string for a
-	 *   URL match (i.e. '//'), possibly with a preceding character (ex, a
-	 *   space, such as: ' //', or a letter, such as: 'a//'). The match is
-	 *   invalid if there is a word character preceding the '//'.
 	 * @return {Boolean} `true` if the match given is valid and should be
 	 *   processed, or `false` if the match is invalid and/or should just not be
 	 *   processed.
 	 */
-	isValidMatch : function( urlMatch, protocolUrlMatch, protocolRelativeMatch ) {
+	isValid : function( urlMatch, protocolUrlMatch ) {
 		if(
 			( protocolUrlMatch && !this.isValidUriScheme( protocolUrlMatch ) ) ||
-			this.urlMatchDoesNotHaveProtocolOrDot( urlMatch, protocolUrlMatch ) ||       // At least one period ('.') must exist in the URL match for us to consider it an actual URL, *unless* it was a full protocol match (like 'http://localhost')
-			this.urlMatchDoesNotHaveAtLeastOneWordChar( urlMatch, protocolUrlMatch ) ||  // At least one letter character must exist in the domain name after a protocol match. Ex: skip over something like "git:1.0"
-			this.isInvalidProtocolRelativeMatch( protocolRelativeMatch )                 // A protocol-relative match which has a word character in front of it (so we can skip something like "abc//google.com")
+			this.urlMatchDoesNotHaveProtocolOrDot( urlMatch, protocolUrlMatch ) ||    // At least one period ('.') must exist in the URL match for us to consider it an actual URL, *unless* it was a full protocol match (like 'http://localhost')
+			this.urlMatchDoesNotHaveAtLeastOneWordChar( urlMatch, protocolUrlMatch )  // At least one letter character must exist in the domain name after a protocol match. Ex: skip over something like "git:1.0"
 		) {
 			return false;
 		}
@@ -2232,543 +3548,201 @@ Autolinker.MatchValidator = Autolinker.Util.extend( Object, {
 		} else {
 			return false;
 		}
-	},
-
-
-	/**
-	 * Determines if a protocol-relative match is an invalid one. This method
-	 * returns `true` if there is a `protocolRelativeMatch`, and that match
-	 * contains a word character before the '//' (i.e. it must contain
-	 * whitespace or nothing before the '//' in order to be considered valid).
-	 *
-	 * @private
-	 * @param {String} protocolRelativeMatch The protocol-relative string for a
-	 *   URL match (i.e. '//'), possibly with a preceding character (ex, a
-	 *   space, such as: ' //', or a letter, such as: 'a//'). The match is
-	 *   invalid if there is a word character preceding the '//'.
-	 * @return {Boolean} `true` if it is an invalid protocol-relative match,
-	 *   `false` otherwise.
-	 */
-	isInvalidProtocolRelativeMatch : function( protocolRelativeMatch ) {
-		return ( !!protocolRelativeMatch && this.invalidProtocolRelMatchRegex.test( protocolRelativeMatch ) );
 	}
 
-} );
+};
 /*global Autolinker */
 /**
- * @abstract
- * @class Autolinker.match.Match
- * 
- * Represents a match found in an input string which should be Autolinked. A Match object is what is provided in a 
- * {@link Autolinker#replaceFn replaceFn}, and may be used to query for details about the match.
- * 
- * For example:
- * 
- *     var input = "...";  // string with URLs, Email Addresses, and Twitter Handles
- *     
- *     var linkedText = Autolinker.link( input, {
- *         replaceFn : function( autolinker, match ) {
- *             console.log( "href = ", match.getAnchorHref() );
- *             console.log( "text = ", match.getAnchorText() );
- *         
- *             switch( match.getType() ) {
- *                 case 'url' : 
- *                     console.log( "url: ", match.getUrl() );
- *                     
- *                 case 'email' :
- *                     console.log( "email: ", match.getEmail() );
- *                     
- *                 case 'twitter' :
- *                     console.log( "twitter: ", match.getTwitterHandle() );
- *             }
- *         }
- *     } );
- *     
- * See the {@link Autolinker} class for more details on using the {@link Autolinker#replaceFn replaceFn}.
- */
-Autolinker.match.Match = Autolinker.Util.extend( Object, {
-	
-	/**
-	 * @cfg {String} matchedText (required)
-	 * 
-	 * The original text that was matched.
-	 */
-	
-	
-	/**
-	 * @constructor
-	 * @param {Object} cfg The configuration properties for the Match instance, specified in an Object (map).
-	 */
-	constructor : function( cfg ) {
-		Autolinker.Util.assign( this, cfg );
-	},
-
-	
-	/**
-	 * Returns a string name for the type of match that this class represents.
-	 * 
-	 * @abstract
-	 * @return {String}
-	 */
-	getType : Autolinker.Util.abstractMethod,
-	
-	
-	/**
-	 * Returns the original text that was matched.
-	 * 
-	 * @return {String}
-	 */
-	getMatchedText : function() {
-		return this.matchedText;
-	},
-	
-
-	/**
-	 * Returns the anchor href that should be generated for the match.
-	 * 
-	 * @abstract
-	 * @return {String}
-	 */
-	getAnchorHref : Autolinker.Util.abstractMethod,
-	
-	
-	/**
-	 * Returns the anchor text that should be generated for the match.
-	 * 
-	 * @abstract
-	 * @return {String}
-	 */
-	getAnchorText : Autolinker.Util.abstractMethod
-
-} );
-/*global Autolinker */
-/**
- * @class Autolinker.match.Email
- * @extends Autolinker.match.Match
- * 
- * Represents a Email match found in an input string which should be Autolinked.
- * 
- * See this class's superclass ({@link Autolinker.match.Match}) for more details.
- */
-Autolinker.match.Email = Autolinker.Util.extend( Autolinker.match.Match, {
-	
-	/**
-	 * @cfg {String} email (required)
-	 * 
-	 * The email address that was matched.
-	 */
-	
-
-	/**
-	 * Returns a string name for the type of match that this class represents.
-	 * 
-	 * @return {String}
-	 */
-	getType : function() {
-		return 'email';
-	},
-	
-	
-	/**
-	 * Returns the email address that was matched.
-	 * 
-	 * @return {String}
-	 */
-	getEmail : function() {
-		return this.email;
-	},
-	
-
-	/**
-	 * Returns the anchor href that should be generated for the match.
-	 * 
-	 * @return {String}
-	 */
-	getAnchorHref : function() {
-		return 'mailto:' + this.email;
-	},
-	
-	
-	/**
-	 * Returns the anchor text that should be generated for the match.
-	 * 
-	 * @return {String}
-	 */
-	getAnchorText : function() {
-		return this.email;
-	}
-	
-} );
-/*global Autolinker */
-/**
- * @class Autolinker.match.Hashtag
- * @extends Autolinker.match.Match
+ * A truncation feature where the ellipsis will be placed at the end of the URL.
  *
- * Represents a Hashtag match found in an input string which should be
- * Autolinked.
- *
- * See this class's superclass ({@link Autolinker.match.Match}) for more
- * details.
+ * @param {String} anchorText
+ * @param {Number} truncateLen The maximum length of the truncated output URL string.
+ * @param {String} ellipsisChars The characters to place within the url, e.g. "..".
+ * @return {String} The truncated URL.
  */
-Autolinker.match.Hashtag = Autolinker.Util.extend( Autolinker.match.Match, {
+Autolinker.truncate.TruncateEnd = function(anchorText, truncateLen, ellipsisChars){
+	return Autolinker.Util.ellipsis( anchorText, truncateLen, ellipsisChars );
+};
 
-	/**
-	 * @cfg {String} serviceName (required)
-	 *
-	 * The service to point hashtag matches to. See {@link Autolinker#hashtag}
-	 * for available values.
-	 */
+/*global Autolinker */
+/**
+ * Date: 2015-10-05
+ * Author: Kasper Søfren <soefritz@gmail.com> (https://github.com/kafoso)
+ *
+ * A truncation feature, where the ellipsis will be placed in the dead-center of the URL.
+ *
+ * @param {String} url             A URL.
+ * @param {Number} truncateLen     The maximum length of the truncated output URL string.
+ * @param {String} ellipsisChars   The characters to place within the url, e.g. "..".
+ * @return {String} The truncated URL.
+ */
+Autolinker.truncate.TruncateMiddle = function(url, truncateLen, ellipsisChars){
+  if (url.length <= truncateLen) {
+    return url;
+  }
+  var availableLength = truncateLen - ellipsisChars.length;
+  var end = "";
+  if (availableLength > 0) {
+    end = url.substr((-1)*Math.floor(availableLength/2));
+  }
+  return (url.substr(0, Math.ceil(availableLength/2)) + ellipsisChars + end).substr(0, truncateLen);
+};
 
-	/**
-	 * @cfg {String} hashtag (required)
-	 *
-	 * The Hashtag that was matched, without the '#'.
-	 */
-
-
-	/**
-	 * Returns the type of match that this class represents.
-	 *
-	 * @return {String}
-	 */
-	getType : function() {
-		return 'hashtag';
-	},
-
-
-	/**
-	 * Returns the matched hashtag.
-	 *
-	 * @return {String}
-	 */
-	getHashtag : function() {
-		return this.hashtag;
-	},
-
-
-	/**
-	 * Returns the anchor href that should be generated for the match.
-	 *
-	 * @return {String}
-	 */
-	getAnchorHref : function() {
-		var serviceName = this.serviceName,
-		    hashtag = this.hashtag;
-
-		switch( serviceName ) {
-			case 'twitter' :
-				return 'https://twitter.com/hashtag/' + hashtag;
-			case 'facebook' :
-				return 'https://www.facebook.com/hashtag/' + hashtag;
-
-			default :  // Shouldn't happen because Autolinker's constructor should block any invalid values, but just in case.
-				throw new Error( 'Unknown service name to point hashtag to: ', serviceName );
+/*global Autolinker */
+/**
+ * Date: 2015-10-05
+ * Author: Kasper Søfren <soefritz@gmail.com> (https://github.com/kafoso)
+ *
+ * A truncation feature, where the ellipsis will be placed at a section within
+ * the URL making it still somewhat human readable.
+ *
+ * @param {String} url						 A URL.
+ * @param {Number} truncateLen		 The maximum length of the truncated output URL string.
+ * @param {String} ellipsisChars	 The characters to place within the url, e.g. "..".
+ * @return {String} The truncated URL.
+ */
+Autolinker.truncate.TruncateSmart = function(url, truncateLen, ellipsisChars){
+	var parse_url = function(url){ // Functionality inspired by PHP function of same name
+		var urlObj = {};
+		var urlSub = url;
+		var match = urlSub.match(/^([a-z]+):\/\//i);
+		if (match) {
+			urlObj.scheme = match[1];
+			urlSub = urlSub.substr(match[0].length);
 		}
-	},
-
-
-	/**
-	 * Returns the anchor text that should be generated for the match.
-	 *
-	 * @return {String}
-	 */
-	getAnchorText : function() {
-		return '#' + this.hashtag;
-	}
-
-} );
-/*global Autolinker */
-/**
- * @class Autolinker.match.Phone
- * @extends Autolinker.match.Match
- *
- * Represents a Phone number match found in an input string which should be
- * Autolinked.
- *
- * See this class's superclass ({@link Autolinker.match.Match}) for more
- * details.
- */
-Autolinker.match.Phone = Autolinker.Util.extend( Autolinker.match.Match, {
-
-	/**
-	 * @cfg {String} number (required)
-	 *
-	 * The phone number that was matched.
-	 */
-
-
-	/**
-	 * Returns a string name for the type of match that this class represents.
-	 *
-	 * @return {String}
-	 */
-	getType : function() {
-		return 'phone';
-	},
-
-
-	/**
-	 * Returns the phone number that was matched.
-	 *
-	 * @return {String}
-	 */
-	getNumber: function() {
-		return this.number;
-	},
-
-
-	/**
-	 * Returns the anchor href that should be generated for the match.
-	 *
-	 * @return {String}
-	 */
-	getAnchorHref : function() {
-		return 'tel:' + this.number;
-	},
-
-
-	/**
-	 * Returns the anchor text that should be generated for the match.
-	 *
-	 * @return {String}
-	 */
-	getAnchorText : function() {
-		return this.matchedText;
-	}
-
-} );
-
-/*global Autolinker */
-/**
- * @class Autolinker.match.Twitter
- * @extends Autolinker.match.Match
- * 
- * Represents a Twitter match found in an input string which should be Autolinked.
- * 
- * See this class's superclass ({@link Autolinker.match.Match}) for more details.
- */
-Autolinker.match.Twitter = Autolinker.Util.extend( Autolinker.match.Match, {
-	
-	/**
-	 * @cfg {String} twitterHandle (required)
-	 * 
-	 * The Twitter handle that was matched.
-	 */
-	
-
-	/**
-	 * Returns the type of match that this class represents.
-	 * 
-	 * @return {String}
-	 */
-	getType : function() {
-		return 'twitter';
-	},
-	
-	
-	/**
-	 * Returns a string name for the type of match that this class represents.
-	 * 
-	 * @return {String}
-	 */
-	getTwitterHandle : function() {
-		return this.twitterHandle;
-	},
-	
-
-	/**
-	 * Returns the anchor href that should be generated for the match.
-	 * 
-	 * @return {String}
-	 */
-	getAnchorHref : function() {
-		return 'https://twitter.com/' + this.twitterHandle;
-	},
-	
-	
-	/**
-	 * Returns the anchor text that should be generated for the match.
-	 * 
-	 * @return {String}
-	 */
-	getAnchorText : function() {
-		return '@' + this.twitterHandle;
-	}
-	
-} );
-/*global Autolinker */
-/**
- * @class Autolinker.match.Url
- * @extends Autolinker.match.Match
- * 
- * Represents a Url match found in an input string which should be Autolinked.
- * 
- * See this class's superclass ({@link Autolinker.match.Match}) for more details.
- */
-Autolinker.match.Url = Autolinker.Util.extend( Autolinker.match.Match, {
-	
-	/**
-	 * @cfg {String} url (required)
-	 * 
-	 * The url that was matched.
-	 */
-	
-	/**
-	 * @cfg {Boolean} protocolUrlMatch (required)
-	 * 
-	 * `true` if the URL is a match which already has a protocol (i.e. 'http://'), `false` if the match was from a 'www' or
-	 * known TLD match.
-	 */
-	
-	/**
-	 * @cfg {Boolean} protocolRelativeMatch (required)
-	 * 
-	 * `true` if the URL is a protocol-relative match. A protocol-relative match is a URL that starts with '//',
-	 * and will be either http:// or https:// based on the protocol that the site is loaded under.
-	 */
-	
-	/**
-	 * @cfg {Boolean} stripPrefix (required)
-	 * @inheritdoc Autolinker#stripPrefix
-	 */
-	
-
-	/**
-	 * @private
-	 * @property {RegExp} urlPrefixRegex
-	 * 
-	 * A regular expression used to remove the 'http://' or 'https://' and/or the 'www.' from URLs.
-	 */
-	urlPrefixRegex: /^(https?:\/\/)?(www\.)?/i,
-	
-	/**
-	 * @private
-	 * @property {RegExp} protocolRelativeRegex
-	 * 
-	 * The regular expression used to remove the protocol-relative '//' from the {@link #url} string, for purposes
-	 * of {@link #getAnchorText}. A protocol-relative URL is, for example, "//yahoo.com"
-	 */
-	protocolRelativeRegex : /^\/\//,
-	
-	/**
-	 * @private
-	 * @property {Boolean} protocolPrepended
-	 * 
-	 * Will be set to `true` if the 'http://' protocol has been prepended to the {@link #url} (because the
-	 * {@link #url} did not have a protocol)
-	 */
-	protocolPrepended : false,
-	
-
-	/**
-	 * Returns a string name for the type of match that this class represents.
-	 * 
-	 * @return {String}
-	 */
-	getType : function() {
-		return 'url';
-	},
-	
-	
-	/**
-	 * Returns the url that was matched, assuming the protocol to be 'http://' if the original
-	 * match was missing a protocol.
-	 * 
-	 * @return {String}
-	 */
-	getUrl : function() {
-		var url = this.url;
-		
-		// if the url string doesn't begin with a protocol, assume 'http://'
-		if( !this.protocolRelativeMatch && !this.protocolUrlMatch && !this.protocolPrepended ) {
-			url = this.url = 'http://' + url;
-			
-			this.protocolPrepended = true;
+		match = urlSub.match(/^(.*?)(?=(\?|#|\/|$))/i);
+		if (match) {
+			urlObj.host = match[1];
+			urlSub = urlSub.substr(match[0].length);
 		}
-		
+		match = urlSub.match(/^\/(.*?)(?=(\?|#|$))/i);
+		if (match) {
+			urlObj.path = match[1];
+			urlSub = urlSub.substr(match[0].length);
+		}
+		match = urlSub.match(/^\?(.*?)(?=(#|$))/i);
+		if (match) {
+			urlObj.query = match[1];
+			urlSub = urlSub.substr(match[0].length);
+		}
+		match = urlSub.match(/^#(.*?)$/i);
+		if (match) {
+			urlObj.fragment = match[1];
+			//urlSub = urlSub.substr(match[0].length);  -- not used. Uncomment if adding another block.
+		}
+		return urlObj;
+	};
+
+	var buildUrl = function(urlObj){
+		var url = "";
+		if (urlObj.scheme && urlObj.host) {
+			url += urlObj.scheme + "://";
+		}
+		if (urlObj.host) {
+			url += urlObj.host;
+		}
+		if (urlObj.path) {
+			url += "/" + urlObj.path;
+		}
+		if (urlObj.query) {
+			url += "?" + urlObj.query;
+		}
+		if (urlObj.fragment) {
+			url += "#" + urlObj.fragment;
+		}
 		return url;
-	},
-	
+	};
 
-	/**
-	 * Returns the anchor href that should be generated for the match.
-	 * 
-	 * @return {String}
-	 */
-	getAnchorHref : function() {
-		var url = this.getUrl();
-		
-		return url.replace( /&amp;/g, '&' );  // any &amp;'s in the URL should be converted back to '&' if they were displayed as &amp; in the source html 
-	},
-	
-	
-	/**
-	 * Returns the anchor text that should be generated for the match.
-	 * 
-	 * @return {String}
-	 */
-	getAnchorText : function() {
-		var anchorText = this.getUrl();
-		
-		if( this.protocolRelativeMatch ) {
-			// Strip off any protocol-relative '//' from the anchor text
-			anchorText = this.stripProtocolRelativePrefix( anchorText );
+	var buildSegment = function(segment, remainingAvailableLength){
+		var remainingAvailableLengthHalf = remainingAvailableLength/ 2,
+				startOffset = Math.ceil(remainingAvailableLengthHalf),
+				endOffset = (-1)*Math.floor(remainingAvailableLengthHalf),
+				end = "";
+		if (endOffset < 0) {
+			end = segment.substr(endOffset);
 		}
-		if( this.stripPrefix ) {
-			anchorText = this.stripUrlPrefix( anchorText );
-		}
-		anchorText = this.removeTrailingSlash( anchorText );  // remove trailing slash, if there is one
-		
-		return anchorText;
-	},
-	
-	
-	// ---------------------------------------
-	
-	// Utility Functionality
-	
-	/**
-	 * Strips the URL prefix (such as "http://" or "https://") from the given text.
-	 * 
-	 * @private
-	 * @param {String} text The text of the anchor that is being generated, for which to strip off the
-	 *   url prefix (such as stripping off "http://")
-	 * @return {String} The `anchorText`, with the prefix stripped.
-	 */
-	stripUrlPrefix : function( text ) {
-		return text.replace( this.urlPrefixRegex, '' );
-	},
-	
-	
-	/**
-	 * Strips any protocol-relative '//' from the anchor text.
-	 * 
-	 * @private
-	 * @param {String} text The text of the anchor that is being generated, for which to strip off the
-	 *   protocol-relative prefix (such as stripping off "//")
-	 * @return {String} The `anchorText`, with the protocol-relative prefix stripped.
-	 */
-	stripProtocolRelativePrefix : function( text ) {
-		return text.replace( this.protocolRelativeRegex, '' );
-	},
-	
-	
-	/**
-	 * Removes any trailing slash from the given `anchorText`, in preparation for the text to be displayed.
-	 * 
-	 * @private
-	 * @param {String} anchorText The text of the anchor that is being generated, for which to remove any trailing
-	 *   slash ('/') that may exist.
-	 * @return {String} The `anchorText`, with the trailing slash removed.
-	 */
-	removeTrailingSlash : function( anchorText ) {
-		if( anchorText.charAt( anchorText.length - 1 ) === '/' ) {
-			anchorText = anchorText.slice( 0, -1 );
-		}
-		return anchorText;
+		return segment.substr(0, startOffset) + ellipsisChars + end;
+	};
+	if (url.length <= truncateLen) {
+		return url;
 	}
-	
-} );
-return Autolinker;
+	var availableLength = truncateLen - ellipsisChars.length;
+	var urlObj = parse_url(url);
+	// Clean up the URL
+	if (urlObj.query) {
+		var matchQuery = urlObj.query.match(/^(.*?)(?=(\?|\#))(.*?)$/i);
+		if (matchQuery) {
+			// Malformed URL; two or more "?". Removed any content behind the 2nd.
+			urlObj.query = urlObj.query.substr(0, matchQuery[1].length);
+			url = buildUrl(urlObj);
+		}
+	}
+	if (url.length <= truncateLen) {
+		return url;
+	}
+	if (urlObj.host) {
+		urlObj.host = urlObj.host.replace(/^www\./, "");
+		url = buildUrl(urlObj);
+	}
+	if (url.length <= truncateLen) {
+		return url;
+	}
+	// Process and build the URL
+	var str = "";
+	if (urlObj.host) {
+		str += urlObj.host;
+	}
+	if (str.length >= availableLength) {
+		if (urlObj.host.length == truncateLen) {
+			return (urlObj.host.substr(0, (truncateLen - ellipsisChars.length)) + ellipsisChars).substr(0, truncateLen);
+		}
+		return buildSegment(str, availableLength).substr(0, truncateLen);
+	}
+	var pathAndQuery = "";
+	if (urlObj.path) {
+		pathAndQuery += "/" + urlObj.path;
+	}
+	if (urlObj.query) {
+		pathAndQuery += "?" + urlObj.query;
+	}
+	if (pathAndQuery) {
+		if ((str+pathAndQuery).length >= availableLength) {
+			if ((str+pathAndQuery).length == truncateLen) {
+				return (str + pathAndQuery).substr(0, truncateLen);
+			}
+			var remainingAvailableLength = availableLength - str.length;
+			return (str + buildSegment(pathAndQuery, remainingAvailableLength)).substr(0, truncateLen);
+		} else {
+			str += pathAndQuery;
+		}
+	}
+	if (urlObj.fragment) {
+		var fragment = "#"+urlObj.fragment;
+		if ((str+fragment).length >= availableLength) {
+			if ((str+fragment).length == truncateLen) {
+				return (str + fragment).substr(0, truncateLen);
+			}
+			var remainingAvailableLength2 = availableLength - str.length;
+			return (str + buildSegment(fragment, remainingAvailableLength2)).substr(0, truncateLen);
+		} else {
+			str += fragment;
+		}
+	}
+	if (urlObj.scheme && urlObj.host) {
+		var scheme = urlObj.scheme + "://";
+		if ((str+scheme).length < availableLength) {
+			return (scheme + str).substr(0, truncateLen);
+		}
+	}
+	if (str.length <= truncateLen) {
+		return str;
+	}
+	var end = "";
+	if (availableLength > 0) {
+		end = str.substr((-1)*Math.floor(availableLength/2));
+	}
+	return (str.substr(0, Math.ceil(availableLength/2)) + ellipsisChars + end).substr(0, truncateLen);
+};
 
+return Autolinker;
 }));

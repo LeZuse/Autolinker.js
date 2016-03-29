@@ -20,8 +20,9 @@
  *     // produces: 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>'
  *
  *
- * The {@link #static-link static link()} method may also be used to inline options into a single call, which may
- * be more convenient for one-off uses. For example:
+ * The {@link #static-link static link()} method may also be used to inline
+ * options into a single call, which may be more convenient for one-off uses.
+ * For example:
  *
  *     var html = Autolinker.link( "Joe went to www.yahoo.com", {
  *         newWindow : false,
@@ -95,101 +96,168 @@
  *
  * The function may return the following values:
  *
- * - `true` (Boolean): Allow Autolinker to replace the match as it normally would.
+ * - `true` (Boolean): Allow Autolinker to replace the match as it normally
+ *   would.
  * - `false` (Boolean): Do not replace the current match at all - leave as-is.
- * - Any String: If a string is returned from the function, the string will be used directly as the replacement HTML for
- *   the match.
- * - An {@link Autolinker.HtmlTag} instance, which can be used to build/modify an HTML tag before writing out its HTML text.
+ * - Any String: If a string is returned from the function, the string will be
+ *   used directly as the replacement HTML for the match.
+ * - An {@link Autolinker.HtmlTag} instance, which can be used to build/modify
+ *   an HTML tag before writing out its HTML text.
  *
  * @constructor
- * @param {Object} [config] The configuration options for the Autolinker instance, specified in an Object (map).
+ * @param {Object} [cfg] The configuration options for the Autolinker instance,
+ *   specified in an Object (map).
  */
 var Autolinker = function( cfg ) {
-	Autolinker.Util.assign( this, cfg );  // assign the properties of `cfg` onto the Autolinker instance. Prototype properties will be used for missing configs.
+	cfg = cfg || {};
+
+	this.urls = this.normalizeUrlsCfg( cfg.urls );
+	this.email = typeof cfg.email === 'boolean' ? cfg.email : true;
+	this.twitter = typeof cfg.twitter === 'boolean' ? cfg.twitter : true;
+	this.phone = typeof cfg.phone === 'boolean' ? cfg.phone : true;
+	this.hashtag = cfg.hashtag || false;
+	this.newWindow = typeof cfg.newWindow === 'boolean' ? cfg.newWindow : true;
+	this.stripPrefix = typeof cfg.stripPrefix === 'boolean' ? cfg.stripPrefix : true;
 
 	// Validate the value of the `hashtag` cfg.
 	var hashtag = this.hashtag;
-	if( hashtag !== false && hashtag !== 'twitter' && hashtag !== 'facebook' ) {
+	if( hashtag !== false && hashtag !== 'twitter' && hashtag !== 'facebook' && hashtag !== 'instagram' ) {
 		throw new Error( "invalid `hashtag` cfg - see docs" );
 	}
+
+	this.truncate = this.normalizeTruncateCfg( cfg.truncate );
+	this.className = cfg.className || '';
+	this.replaceFn = cfg.replaceFn || null;
+
+	this.htmlParser = null;
+	this.matchers = null;
+	this.tagBuilder = null;
 };
 
 Autolinker.prototype = {
 	constructor : Autolinker,  // fix constructor property
 
 	/**
-	 * @cfg {Boolean} urls
+	 * @cfg {Boolean/Object} [urls=true]
 	 *
-	 * `true` if miscellaneous URLs should be automatically linked, `false` if they should not be.
+	 * `true` if URLs should be automatically linked, `false` if they should not
+	 * be.
+	 *
+	 * This option also accepts an Object form with 3 properties, to allow for
+	 * more customization of what exactly gets linked. All default to `true`:
+	 *
+	 * @param {Boolean} schemeMatches `true` to match URLs found prefixed with a
+	 *   scheme, i.e. `http://google.com`, or `other+scheme://google.com`,
+	 *   `false` to prevent these types of matches.
+	 * @param {Boolean} wwwMatches `true` to match urls found prefixed with
+	 *   `'www.'`, i.e. `www.google.com`. `false` to prevent these types of
+	 *   matches. Note that if the URL had a prefixed scheme, and
+	 *   `schemeMatches` is true, it will still be linked.
+	 * @param {Boolean} tldMatches `true` to match URLs with known top level
+	 *   domains (.com, .net, etc.) that are not prefixed with a scheme or
+	 *   `'www.'`. This option attempts to match anything that looks like a URL
+	 *   in the given text. Ex: `google.com`, `asdf.org/?page=1`, etc. `false`
+	 *   to prevent these types of matches.
 	 */
-	urls : true,
 
 	/**
-	 * @cfg {Boolean} email
+	 * @cfg {Boolean} [email=true]
 	 *
-	 * `true` if email addresses should be automatically linked, `false` if they should not be.
+	 * `true` if email addresses should be automatically linked, `false` if they
+	 * should not be.
 	 */
-	email : true,
 
 	/**
-	 * @cfg {Boolean} twitter
+	 * @cfg {Boolean} [twitter=true]
 	 *
-	 * `true` if Twitter handles ("@example") should be automatically linked, `false` if they should not be.
+	 * `true` if Twitter handles ("@example") should be automatically linked,
+	 * `false` if they should not be.
 	 */
-	twitter : true,
 
 	/**
-	 * @cfg {Boolean} phone
+	 * @cfg {Boolean} [phone=true]
 	 *
-	 * `true` if Phone numbers ("(555)555-5555") should be automatically linked, `false` if they should not be.
+	 * `true` if Phone numbers ("(555)555-5555") should be automatically linked,
+	 * `false` if they should not be.
 	 */
-	phone: true,
 
 	/**
-	 * @cfg {Boolean/String} hashtag
+	 * @cfg {Boolean/String} [hashtag=false]
 	 *
 	 * A string for the service name to have hashtags (ex: "#myHashtag")
 	 * auto-linked to. The currently-supported values are:
 	 *
 	 * - 'twitter'
 	 * - 'facebook'
+	 * - 'instagram'
 	 *
 	 * Pass `false` to skip auto-linking of hashtags.
 	 */
-	hashtag : false,
 
 	/**
-	 * @cfg {Boolean} newWindow
+	 * @cfg {Boolean} [newWindow=true]
 	 *
 	 * `true` if the links should open in a new window, `false` otherwise.
 	 */
-	newWindow : true,
 
 	/**
-	 * @cfg {Boolean} stripPrefix
+	 * @cfg {Boolean} [stripPrefix=true]
 	 *
 	 * `true` if 'http://' or 'https://' and/or the 'www.' should be stripped
 	 * from the beginning of URL links' text, `false` otherwise.
 	 */
-	stripPrefix : true,
 
 	/**
-	 * @cfg {Number} truncate
+	 * @cfg {Number/Object} truncate
 	 *
-	 * A number for how many characters long matched text should be truncated to inside the text of
-	 * a link. If the matched text is over this number of characters, it will be truncated to this length by
-	 * adding a two period ellipsis ('..') to the end of the string.
+	 * ## Number Form
 	 *
-	 * For example: A url like 'http://www.yahoo.com/some/long/path/to/a/file' truncated to 25 characters might look
-	 * something like this: 'yahoo.com/some/long/pat..'
+	 * A number for how many characters matched text should be truncated to
+	 * inside the text of a link. If the matched text is over this number of
+	 * characters, it will be truncated to this length by adding a two period
+	 * ellipsis ('..') to the end of the string.
+	 *
+	 * For example: A url like 'http://www.yahoo.com/some/long/path/to/a/file'
+	 * truncated to 25 characters might look something like this:
+	 * 'yahoo.com/some/long/pat..'
+	 *
+	 * Example Usage:
+	 *
+	 *     truncate: 25
+	 *
+	 *
+	 * ## Object Form
+	 *
+	 * An Object may also be provided with two properties: `length` (Number) and
+	 * `location` (String). `location` may be one of the following: 'end'
+	 * (default), 'middle', or 'smart'.
+	 *
+	 * Example Usage:
+	 *
+	 *     truncate: { length: 25, location: 'middle' }
+	 *
+	 * @cfg {Number} truncate.length How many characters to allow before
+	 *   truncation will occur.
+	 * @cfg {"end"/"middle"/"smart"} [truncate.location="end"]
+	 *
+	 * - 'end' (default): will truncate up to the number of characters, and then
+	 *   add an ellipsis at the end. Ex: 'yahoo.com/some/long/pat..'
+	 * - 'middle': will truncate and add the ellipsis in the middle. Ex:
+	 *   'yahoo.com/s..th/to/a/file'
+	 * - 'smart': for URLs where the algorithm attempts to strip out unnecessary
+	 *   parts first (such as the 'www.', then URL scheme, hash, etc.),
+	 *   attempting to make the URL human-readable before looking for a good
+	 *   point to insert the ellipsis if it is still too long. Ex:
+	 *   'yahoo.com/some..to/a/file'. For more details, see
+	 *   {@link Autolinker.truncate.TruncateSmart}.
 	 */
-	truncate : undefined,
 
 	/**
 	 * @cfg {String} className
 	 *
-	 * A CSS class name to add to the generated links. This class will be added to all links, as well as this class
-	 * plus match suffixes for styling url/email/phone/twitter/hashtag links differently.
+	 * A CSS class name to add to the generated links. This class will be added
+	 * to all links, as well as this class plus match suffixes for styling
+	 * url/email/phone/twitter/hashtag links differently.
 	 *
 	 * For example, if this config is provided as "myLink", then:
 	 *
@@ -199,7 +267,6 @@ Autolinker.prototype = {
 	 * - Phone links will have the CSS classes: "myLink myLink-phone"
 	 * - Hashtag links will have the CSS classes: "myLink myLink-hashtag"
 	 */
-	className : "",
 
 	/**
 	 * @cfg {Function} replaceFn
@@ -210,10 +277,13 @@ Autolinker.prototype = {
 	 *
 	 * This function is called with the following parameters:
 	 *
-	 * @cfg {Autolinker} replaceFn.autolinker The Autolinker instance, which may be used to retrieve child objects from (such
-	 *   as the instance's {@link #getTagBuilder tag builder}).
-	 * @cfg {Autolinker.match.Match} replaceFn.match The Match instance which can be used to retrieve information about the
-	 *   match that the `replaceFn` is currently processing. See {@link Autolinker.match.Match} subclasses for details.
+	 * @cfg {Autolinker} replaceFn.autolinker The Autolinker instance, which may
+	 *   be used to retrieve child objects from (such as the instance's
+	 *   {@link #getTagBuilder tag builder}).
+	 * @cfg {Autolinker.match.Match} replaceFn.match The Match instance which
+	 *   can be used to retrieve information about the match that the `replaceFn`
+	 *   is currently processing. See {@link Autolinker.match.Match} subclasses
+	 *   for details.
 	 */
 
 
@@ -221,28 +291,238 @@ Autolinker.prototype = {
 	 * @private
 	 * @property {Autolinker.htmlParser.HtmlParser} htmlParser
 	 *
-	 * The HtmlParser instance used to skip over HTML tags, while finding text nodes to process. This is lazily instantiated
-	 * in the {@link #getHtmlParser} method.
+	 * The HtmlParser instance used to skip over HTML tags, while finding text
+	 * nodes to process. This is lazily instantiated in the {@link #getHtmlParser}
+	 * method.
 	 */
-	htmlParser : undefined,
 
 	/**
 	 * @private
-	 * @property {Autolinker.matchParser.MatchParser} matchParser
+	 * @property {Autolinker.matcher.Matcher[]} matchers
 	 *
-	 * The MatchParser instance used to find matches in the text nodes of an input string passed to
-	 * {@link #link}. This is lazily instantiated in the {@link #getMatchParser} method.
+	 * The {@link Autolinker.matcher.Matcher} instances for this Autolinker
+	 * instance.
+	 *
+	 * This is lazily created in {@link #getMatchers}.
 	 */
-	matchParser : undefined,
 
 	/**
 	 * @private
 	 * @property {Autolinker.AnchorTagBuilder} tagBuilder
 	 *
-	 * The AnchorTagBuilder instance used to build match replacement anchor tags. Note: this is lazily instantiated
-	 * in the {@link #getTagBuilder} method.
+	 * The AnchorTagBuilder instance used to build match replacement anchor tags.
+	 * Note: this is lazily instantiated in the {@link #getTagBuilder} method.
 	 */
-	tagBuilder : undefined,
+
+
+	/**
+	 * Normalizes the {@link #urls} config into an Object with 3 properties:
+	 * `schemeMatches`, `wwwMatches`, and `tldMatches`, all Booleans.
+	 *
+	 * See {@link #urls} config for details.
+	 *
+	 * @private
+	 * @param {Boolean/Object} urls
+	 * @return {Object}
+	 */
+	normalizeUrlsCfg : function( urls ) {
+		if( urls == null ) urls = true;  // default to `true`
+
+		if( typeof urls === 'boolean' ) {
+			return { schemeMatches: urls, wwwMatches: urls, tldMatches: urls };
+
+		} else {  // object form
+			return {
+				schemeMatches : typeof urls.schemeMatches === 'boolean' ? urls.schemeMatches : true,
+				wwwMatches    : typeof urls.wwwMatches === 'boolean'    ? urls.wwwMatches    : true,
+				tldMatches    : typeof urls.tldMatches === 'boolean'    ? urls.tldMatches    : true
+			};
+		}
+	},
+
+
+	/**
+	 * Normalizes the {@link #truncate} config into an Object with 2 properties:
+	 * `length` (Number), and `location` (String).
+	 *
+	 * See {@link #truncate} config for details.
+	 *
+	 * @private
+	 * @param {Number/Object} truncate
+	 * @return {Object}
+	 */
+	normalizeTruncateCfg : function( truncate ) {
+		if( typeof truncate === 'number' ) {
+			return { length: truncate, location: 'end' };
+
+		} else {  // object, or undefined/null
+			return Autolinker.Util.defaults( truncate || {}, {
+				length   : Number.POSITIVE_INFINITY,
+				location : 'end'
+			} );
+		}
+	},
+
+
+	/**
+	 * Parses the input `textOrHtml` looking for URLs, email addresses, phone
+	 * numbers, username handles, and hashtags (depending on the configuration
+	 * of the Autolinker instance), and returns an array of {@link Autolinker.match.Match}
+	 * objects describing those matches.
+	 *
+	 * This method is used by the {@link #link} method, but can also be used to
+	 * simply do parsing of the input in order to discover what kinds of links
+	 * there are and how many.
+	 *
+	 * @param {String} textOrHtml The HTML or text to find matches within
+	 *   (depending on if the {@link #urls}, {@link #email}, {@link #phone},
+	 *   {@link #twitter}, and {@link #hashtag} options are enabled).
+	 * @return {Autolinker.match.Match[]} The array of Matches found in the
+	 *   given input `textOrHtml`.
+	 */
+	parse : function( textOrHtml ) {
+		var htmlParser = this.getHtmlParser(),
+		    htmlNodes = htmlParser.parse( textOrHtml ),
+		    anchorTagStackCount = 0,  // used to only process text around anchor tags, and any inner text/html they may have;
+		    matches = [];
+
+		// Find all matches within the `textOrHtml` (but not matches that are
+		// already nested within <a> tags)
+		for( var i = 0, len = htmlNodes.length; i < len; i++ ) {
+			var node = htmlNodes[ i ],
+			    nodeType = node.getType();
+
+			if( nodeType === 'element' && node.getTagName() === 'a' ) {  // Process HTML anchor element nodes in the input `textOrHtml` to find out when we're within an <a> tag
+				if( !node.isClosing() ) {  // it's the start <a> tag
+					anchorTagStackCount++;
+				} else {  // it's the end </a> tag
+					anchorTagStackCount = Math.max( anchorTagStackCount - 1, 0 );  // attempt to handle extraneous </a> tags by making sure the stack count never goes below 0
+				}
+
+			} else if( nodeType === 'text' && anchorTagStackCount === 0 ) {  // Process text nodes that are not within an <a> tag
+				var textNodeMatches = this.parseText( node.getText(), node.getOffset() );
+
+				matches.push.apply( matches, textNodeMatches );
+			}
+		}
+
+
+		// After we have found all matches, remove subsequent matches that
+		// overlap with a previous match. This can happen for instance with URLs,
+		// where the url 'google.com/#link' would match '#link' as a hashtag.
+		matches = this.compactMatches( matches );
+
+		// And finally, remove matches for match types that have been turned
+		// off. We needed to have all match types turned on initially so that
+		// things like hashtags could be filtered out if they were really just
+		// part of a URL match (for instance, as a named anchor).
+		matches = this.removeUnwantedMatches( matches );
+
+		return matches;
+	},
+
+
+	/**
+	 * After we have found all matches, we need to remove subsequent matches
+	 * that overlap with a previous match. This can happen for instance with
+	 * URLs, where the url 'google.com/#link' would match '#link' as a hashtag.
+	 *
+	 * @private
+	 * @param {Autolinker.match.Match[]} matches
+	 * @return {Autolinker.match.Match[]}
+	 */
+	compactMatches : function( matches ) {
+		// First, the matches need to be sorted in order of offset
+		matches.sort( function( a, b ) { return a.getOffset() - b.getOffset(); } );
+
+		for( var i = 0; i < matches.length - 1; i++ ) {
+			var match = matches[ i ],
+			    endIdx = match.getOffset() + match.getMatchedText().length;
+
+			// Remove subsequent matches that overlap with the current match
+			while( i + 1 < matches.length && matches[ i + 1 ].getOffset() <= endIdx ) {
+				matches.splice( i + 1, 1 );
+			}
+		}
+
+		return matches;
+	},
+
+
+	/**
+	 * Removes matches for matchers that were turned off in the options. For
+	 * example, if {@link #hashtag hashtags} were not to be matched, we'll
+	 * remove them from the `matches` array here.
+	 *
+	 * @private
+	 * @param {Autolinker.match.Match[]} matches The array of matches to remove
+	 *   the unwanted matches from. Note: this array is mutated for the
+	 *   removals.
+	 * @return {Autolinker.match.Match[]} The mutated input `matches` array.
+	 */
+	removeUnwantedMatches : function( matches ) {
+		var remove = Autolinker.Util.remove;
+
+		if( !this.hashtag ) remove( matches, function( match ) { return match.getType() === 'hashtag'; } );
+		if( !this.email )   remove( matches, function( match ) { return match.getType() === 'email'; } );
+		if( !this.phone )   remove( matches, function( match ) { return match.getType() === 'phone'; } );
+		if( !this.twitter ) remove( matches, function( match ) { return match.getType() === 'twitter'; } );
+		if( !this.urls.schemeMatches ) {
+			remove( matches, function( m ) { return m.getType() === 'url' && m.getUrlMatchType() === 'scheme'; } );
+		}
+		if( !this.urls.wwwMatches ) {
+			remove( matches, function( m ) { return m.getType() === 'url' && m.getUrlMatchType() === 'www'; } );
+		}
+		if( !this.urls.tldMatches ) {
+			remove( matches, function( m ) { return m.getType() === 'url' && m.getUrlMatchType() === 'tld'; } );
+		}
+
+		return matches;
+	},
+
+
+	/**
+	 * Parses the input `text` looking for URLs, email addresses, phone
+	 * numbers, username handles, and hashtags (depending on the configuration
+	 * of the Autolinker instance), and returns an array of {@link Autolinker.match.Match}
+	 * objects describing those matches.
+	 *
+	 * This method processes a **non-HTML string**, and is used to parse and
+	 * match within the text nodes of an HTML string. This method is used
+	 * internally by {@link #parse}.
+	 *
+	 * @private
+	 * @param {String} text The text to find matches within (depending on if the
+	 *   {@link #urls}, {@link #email}, {@link #phone}, {@link #twitter}, and
+	 *   {@link #hashtag} options are enabled). This must be a non-HTML string.
+	 * @param {Number} [offset=0] The offset of the text node within the
+	 *   original string. This is used when parsing with the {@link #parse}
+	 *   method to generate correct offsets within the {@link Autolinker.match.Match}
+	 *   instances, but may be omitted if calling this method publicly.
+	 * @return {Autolinker.match.Match[]} The array of Matches found in the
+	 *   given input `text`.
+	 */
+	parseText : function( text, offset ) {
+		offset = offset || 0;
+		var matchers = this.getMatchers(),
+		    matches = [];
+
+		for( var i = 0, numMatchers = matchers.length; i < numMatchers; i++ ) {
+			var textMatches = matchers[ i ].parseMatches( text );
+
+			// Correct the offset of each of the matches. They are originally
+			// the offset of the match within the provided text node, but we
+			// need to correct them to be relative to the original HTML input
+			// string (i.e. the one provided to #parse).
+			for( var j = 0, numTextMatches = textMatches.length; j < numTextMatches; j++ ) {
+				textMatches[ j ].setOffset( offset + textMatches[ j ].getOffset() );
+			}
+
+			matches.push.apply( matches, textMatches );
+		}
+		return matches;
+	},
+
 
 	/**
 	 * Automatically links URLs, Email addresses, Phone numbers, Twitter
@@ -266,74 +546,35 @@ Autolinker.prototype = {
 	link : function( textOrHtml ) {
 		if( !textOrHtml ) { return ""; }  // handle `null` and `undefined`
 
-		var htmlParser = this.getHtmlParser(),
-		    htmlNodes = htmlParser.parse( textOrHtml ),
-		    anchorTagStackCount = 0,  // used to only process text around anchor tags, and any inner text/html they may have
-		    resultHtml = [];
+		var matches = this.parse( textOrHtml ),
+			newHtml = [],
+			lastIndex = 0;
 
-		for( var i = 0, len = htmlNodes.length; i < len; i++ ) {
-			var node = htmlNodes[ i ],
-			    nodeType = node.getType(),
-			    nodeText = node.getText();
+		for( var i = 0, len = matches.length; i < len; i++ ) {
+			var match = matches[ i ];
 
-			if( nodeType === 'element' ) {
-				// Process HTML nodes in the input `textOrHtml`
-				if( node.getTagName() === 'a' ) {
-					if( !node.isClosing() ) {  // it's the start <a> tag
-						anchorTagStackCount++;
-					} else {   // it's the end </a> tag
-						anchorTagStackCount = Math.max( anchorTagStackCount - 1, 0 );  // attempt to handle extraneous </a> tags by making sure the stack count never goes below 0
-					}
-				}
-				resultHtml.push( nodeText );  // now add the text of the tag itself verbatim
+			newHtml.push( textOrHtml.substring( lastIndex, match.getOffset() ) );
+			newHtml.push( this.createMatchReturnVal( match ) );
 
-			} else if( nodeType === 'entity' || nodeType === 'comment' ) {
-				resultHtml.push( nodeText );  // append HTML entity nodes (such as '&nbsp;') or HTML comments (such as '<!-- Comment -->') verbatim
-
-			} else {
-				// Process text nodes in the input `textOrHtml`
-				if( anchorTagStackCount === 0 ) {
-					// If we're not within an <a> tag, process the text node to linkify
-					var linkifiedStr = this.linkifyStr( nodeText );
-					resultHtml.push( linkifiedStr );
-
-				} else {
-					// `text` is within an <a> tag, simply append the text - we do not want to autolink anything
-					// already within an <a>...</a> tag
-					resultHtml.push( nodeText );
-				}
-			}
+			lastIndex = match.getOffset() + match.getMatchedText().length;
 		}
+		newHtml.push( textOrHtml.substring( lastIndex ) );  // handle the text after the last match
 
-		return resultHtml.join( "" );
-	},
-
-	/**
-	 * Process the text that lies in between HTML tags, performing the anchor
-	 * tag replacements for the matches, and returns the string with the
-	 * replacements made.
-	 *
-	 * This method does the actual wrapping of matches with anchor tags.
-	 *
-	 * @private
-	 * @param {String} str The string of text to auto-link.
-	 * @return {String} The text with anchor tags auto-filled.
-	 */
-	linkifyStr : function( str ) {
-		return this.getMatchParser().replace( str, this.createMatchReturnVal, this );
+		return newHtml.join( '' );
 	},
 
 
 	/**
-	 * Creates the return string value for a given match in the input string,
-	 * for the {@link #linkifyStr} method.
+	 * Creates the return string value for a given match in the input string.
 	 *
 	 * This method handles the {@link #replaceFn}, if one was provided.
 	 *
 	 * @private
-	 * @param {Autolinker.match.Match} match The Match object that represents the match.
-	 * @return {String} The string that the `match` should be replaced with. This is usually the anchor tag string, but
-	 *   may be the `matchStr` itself if the match is not to be replaced.
+	 * @param {Autolinker.match.Match} match The Match object that represents
+	 *   the match.
+	 * @return {String} The string that the `match` should be replaced with.
+	 *   This is usually the anchor tag string, but may be the `matchStr` itself
+	 *   if the match is not to be replaced.
 	 */
 	createMatchReturnVal : function( match ) {
 		// Handle a custom `replaceFn` being provided
@@ -353,8 +594,7 @@ Autolinker.prototype = {
 
 		} else {  // replaceFnResult === true, or no/unknown return value from function
 			// Perform Autolinker's default anchor tag generation
-			var tagBuilder = this.getTagBuilder(),
-			    anchorTag = tagBuilder.build( match );  // returns an Autolinker.HtmlTag instance
+			var anchorTag = match.buildTag();  // returns an Autolinker.HtmlTag instance
 
 			return anchorTag.toAnchorString();
 		}
@@ -362,7 +602,8 @@ Autolinker.prototype = {
 
 
 	/**
-	 * Lazily instantiates and returns the {@link #htmlParser} instance for this Autolinker instance.
+	 * Lazily instantiates and returns the {@link #htmlParser} instance for this
+	 * Autolinker instance.
 	 *
 	 * @protected
 	 * @return {Autolinker.htmlParser.HtmlParser}
@@ -379,26 +620,30 @@ Autolinker.prototype = {
 
 
 	/**
-	 * Lazily instantiates and returns the {@link #matchParser} instance for this Autolinker instance.
+	 * Lazily instantiates and returns the {@link Autolinker.matcher.Matcher}
+	 * instances for this Autolinker instance.
 	 *
 	 * @protected
-	 * @return {Autolinker.matchParser.MatchParser}
+	 * @return {Autolinker.matcher.Matcher[]}
 	 */
-	getMatchParser : function() {
-		var matchParser = this.matchParser;
+	getMatchers : function() {
+		if( !this.matchers ) {
+			var matchersNs = Autolinker.matcher,
+			    tagBuilder = this.getTagBuilder();
 
-		if( !matchParser ) {
-			matchParser = this.matchParser = new Autolinker.matchParser.MatchParser( {
-				urls        : this.urls,
-				email       : this.email,
-				twitter     : this.twitter,
-				phone       : this.phone,
-				hashtag     : this.hashtag,
-				stripPrefix : this.stripPrefix
-			} );
+			var matchers = [
+				new matchersNs.Hashtag( { tagBuilder: tagBuilder, serviceName: this.hashtag } ),
+				new matchersNs.Email( { tagBuilder: tagBuilder } ),
+				new matchersNs.Phone( { tagBuilder: tagBuilder } ),
+				new matchersNs.Twitter( { tagBuilder: tagBuilder } ),
+				new matchersNs.Url( { tagBuilder: tagBuilder, stripPrefix: this.stripPrefix } )
+			];
+
+			return ( this.matchers = matchers );
+
+		} else {
+			return this.matchers;
 		}
-
-		return matchParser;
 	},
 
 
@@ -469,6 +714,8 @@ Autolinker.link = function( textOrHtml, options ) {
 
 
 // Autolinker Namespaces
+
 Autolinker.match = {};
+Autolinker.matcher = {};
 Autolinker.htmlParser = {};
-Autolinker.matchParser = {};
+Autolinker.truncate = {};
