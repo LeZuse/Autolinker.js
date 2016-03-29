@@ -15,6 +15,14 @@ describe( "Autolinker", function() {
 
 	describe( "config checking", function() {
 
+		describe( "no configs", function() {
+
+			it( "should default to the default options if no `cfg` object is provided (namely, `newWindow: true`)", function() {
+				expect( Autolinker.link( "Welcome to google.com" ) ).toBe( 'Welcome to <a href="http://google.com" target="_blank" rel="noopener noreferrer">google.com</a>' );
+			} );
+
+		} );
+
 		describe( "`hashtag` cfg", function() {
 
 			it( "should throw if `hashtag` is a value other than `false` or one of the valid service names", function() {
@@ -96,9 +104,29 @@ describe( "Autolinker", function() {
 				} );
 
 
-				it( "should not include the '?' char if it is at the end of the URL", function() {
-					var result = autolinker.link( "Joe went to http://localhost:8000? today" );
-					expect( result ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>? today' );
+				it( "should not include [?!:,.;] chars if at the end of the URL", function() {
+					var result1 = autolinker.link( "Joe went to http://localhost:8000? today" );
+					expect( result1 ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>? today' );
+					var result2 = autolinker.link( "Joe went to http://localhost:8000! today" );
+					expect( result2 ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>! today' );
+					var result3 = autolinker.link( "Joe went to http://localhost:8000: today" );
+					expect( result3 ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>: today' );
+					var result4 = autolinker.link( "Joe went to http://localhost:8000, today" );
+					expect( result4 ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>, today' );
+					var result5 = autolinker.link( "Joe went to http://localhost:8000. today" );
+					expect( result5 ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>. today' );
+					var result6 = autolinker.link( "Joe went to http://localhost:8000; today" );
+					expect( result6 ).toBe( 'Joe went to <a href="http://localhost:8000">localhost:8000</a>; today' );
+				} );
+
+
+				it( "should exclude invalid chars after TLD", function() {
+					var result1 = autolinker.link( "Joe went to http://www.yahoo.com's today" );
+					expect( result1 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>\'s today' );
+					var result2 = autolinker.link( "Joe went to https://www.yahoo.com/foo's today" );
+					expect( result2 ).toBe( 'Joe went to <a href="https://www.yahoo.com/foo\'s">yahoo.com/foo\'s</a> today' );
+					var result3 = autolinker.link( "Joe went to http://www.yahoo.com's/foo today" );
+					expect( result3 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>\'s/foo today' );
 				} );
 
 
@@ -157,8 +185,8 @@ describe( "Autolinker", function() {
 
 
 				it( "should automatically link a localhost URL with a port number and a path", function() {
-					var result = autolinker.link( "Joe went to http://localhost:8000/page today." );
-					expect( result ).toBe( 'Joe went to <a href="http://localhost:8000/page">localhost:8000/page</a> today.' );
+					var result = autolinker.link( "Joe went to http://localhost:8000/my-page today." );
+					expect( result ).toBe( 'Joe went to <a href="http://localhost:8000/my-page">localhost:8000/my-page</a> today.' );
 				} );
 
 
@@ -185,6 +213,30 @@ describe( "Autolinker", function() {
 					expect( result ).toBe( 'Joe went to <a href="http://localhost:8000#page=index">localhost:8000#page=index</a> today.' );
 				} );
 
+				it( "should automatically link domain names, paths, query strings, and hashes with numbers in them", function() {
+					var result = autolinker.link( "Joe went to https://abc123def.org/path1/2path?param1=value1#hash123z" );
+					expect( result ).toBe( 'Joe went to <a href="https://abc123def.org/path1/2path?param1=value1#hash123z">abc123def.org/path1/2path?param1=value1#hash123z</a>' );
+				} );
+
+				it( "should automatically link domain names, paths, query strings, and hashes with dashes in them", function() {
+					var result = autolinker.link( "Joe went to https://abc-def.org/his-path/?the-param=the-value#the-hash" );
+					expect( result ).toBe( 'Joe went to <a href="https://abc-def.org/his-path/?the-param=the-value#the-hash">abc-def.org/his-path/?the-param=the-value#the-hash</a>' );
+				} );
+
+				it( "should automatically link domain names, paths, query strings, and hashes with the set of allowed special characters in them", function() {
+					var result = autolinker.link( "Link: https://abc123def.org/-+&@#/%=~_()|\'$*[]?!:,.;/?param1=value-+&@#/%=~_()|\'$*[]?!:,.;#hash-+&@#/%=~_()|\'$*[]?!:,.;z" );
+					expect( result ).toBe( 'Link: <a href="https://abc123def.org/-+&@#/%=~_()|\'$*[]?!:,.;/?param1=value-+&@#/%=~_()|\'$*[]?!:,.;#hash-+&@#/%=~_()|\'$*[]?!:,.;z">abc123def.org/-+&@#/%=~_()|\'$*[]?!:,.;/?param1=value-+&@#/%=~_()|\'$*[]?!:,.;#hash-+&@#/%=~_()|\'$*[]?!:,.;z</a>' );
+				} );
+
+				it( "should automatically link a URL with accented characters", function() {
+					var result = autolinker.link( "Joe went to http://mañana.com/mañana?mañana=1#mañana today." );
+					expect( result ).toBe( 'Joe went to <a href="http://mañana.com/mañana?mañana=1#mañana">mañana.com/mañana?mañana=1#mañana</a> today.' );
+				} );
+
+				it( "should automatically link cyrillic URLs", function() {
+					var result = autolinker.link( "Joe went to https://ru.wikipedia.org/wiki/Кириллица?Кириллица=1#Кириллица" );
+					expect( result ).toBe( 'Joe went to <a href="https://ru.wikipedia.org/wiki/Кириллица?Кириллица=1#Кириллица">ru.wikipedia.org/wiki/Кириллица?Кириллица=1#Кириллица</a>' );
+				} );
 
 				describe( "protocol linking", function() {
 
@@ -194,21 +246,15 @@ describe( "Autolinker", function() {
 					} );
 
 
-					it( "should autolink protocols with at least two characters", function() {
-						var result = autolinker.link( 'link this: gg://example.com/' );
-						expect( result ).toBe( 'link this: <a href="gg://example.com/">gg://example.com</a>' );
+					it( "should autolink protocols with at least one character", function() {
+						var result = autolinker.link( 'link this: g://example.com/' );
+						expect( result ).toBe( 'link this: <a href="g://example.com/">g://example.com</a>' );
 					} );
 
 
 					it( "should autolink protocols with more than 9 characters (as was the previous upper bound, but it seems protocols may be longer)", function() {
 						var result = autolinker.link( 'link this: opaquelocktoken://example' );
 						expect( result ).toBe( 'link this: <a href="opaquelocktoken://example">opaquelocktoken://example</a>' );
-					} );
-
-
-					it( "should NOT autolink a protocol with only one character", function() {
-						var result = autolinker.link( 'do not link this: a://example' );
-						expect( result ).toBe( 'do not link this: a://example' );
 					} );
 
 
@@ -232,17 +278,20 @@ describe( "Autolinker", function() {
 
 
 					it( "should NOT autolink protocols that start with a digit, dash, plus sign, or dot, as per http://tools.ietf.org/html/rfc3986#section-3.1", function() {
-						var result = autolinker.link( 'do not link this: 1a://example' );
-						expect( result ).toBe( 'do not link this: 1a://example' );
+						var result = autolinker.link( 'do not link first char: 1a://example' );
+						expect( result ).toBe( 'do not link first char: 1<a href="a://example">a://example</a>' );
 
-						var result2 = autolinker.link( 'do not link this: -a://example' );
-						expect( result2 ).toBe( 'do not link this: -a://example' );
+						var result2 = autolinker.link( 'do not link first char: -a://example' );
+						expect( result2 ).toBe( 'do not link first char: -<a href="a://example">a://example</a>' );
 
-						var result3 = autolinker.link( 'do not link this: +a://example' );
-						expect( result3 ).toBe( 'do not link this: +a://example' );
+						var result3 = autolinker.link( 'do not link first char: +a://example' );
+						expect( result3 ).toBe( 'do not link first char: +<a href="a://example">a://example</a>' );
 
-						var result4 = autolinker.link( 'do not link this: .a://example' );
-						expect( result4 ).toBe( 'do not link this: .a://example' );
+						var result4 = autolinker.link( 'do not link first char: .a://example' );
+						expect( result4 ).toBe( 'do not link first char: .<a href="a://example">a://example</a>' );
+
+						var result5 = autolinker.link( 'do not link first char: .aa://example' );
+						expect( result5 ).toBe( 'do not link first char: .<a href="aa://example">aa://example</a>' );
 					} );
 
 
@@ -374,9 +423,34 @@ describe( "Autolinker", function() {
 				} );
 
 
-				it( "should not include the '?' char if it is at the end of the URL", function() {
-					var result = autolinker.link( "Joe went to www.yahoo.com? today" );
-					expect( result ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>? today' );
+				it( "should not include [?!:,.;] chars if at the end of the URL", function() {
+					var result1 = autolinker.link( "Joe went to www.yahoo.com? today" );
+					expect( result1 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>? today' );
+					var result2 = autolinker.link( "Joe went to www.yahoo.com! today" );
+					expect( result2 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>! today' );
+					var result3 = autolinker.link( "Joe went to www.yahoo.com: today" );
+					expect( result3 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>: today' );
+					var result4 = autolinker.link( "Joe went to www.yahoo.com, today" );
+					expect( result4 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>, today' );
+					var result5 = autolinker.link( "Joe went to www.yahoo.com. today" );
+					expect( result5 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>. today' );
+					var result6 = autolinker.link( "Joe went to www.yahoo.com; today" );
+					expect( result6 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>; today' );
+				} );
+
+
+				it( "should exclude invalid chars after TLD", function() {
+					var result1 = autolinker.link( "Joe went to www.yahoo.com's today" );
+					expect( result1 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>\'s today' );
+					var result2 = autolinker.link( "Joe went to www.yahoo.com/foo's today" );
+					expect( result2 ).toBe( 'Joe went to <a href="http://www.yahoo.com/foo\'s">yahoo.com/foo\'s</a> today' );
+					var result3 = autolinker.link( "Joe went to www.yahoo.com's/foo today" );
+					expect( result3 ).toBe( 'Joe went to <a href="http://www.yahoo.com">yahoo.com</a>\'s/foo today' );
+				} );
+
+				it( "should automatically link a URL with accented characters", function() {
+					var result = autolinker.link( "Joe went to http://www.mañana.com today." );
+					expect( result ).toBe( 'Joe went to <a href="http://www.mañana.com">mañana.com</a> today.' );
 				} );
 
 			} );
@@ -444,9 +518,33 @@ describe( "Autolinker", function() {
 				} );
 
 
-				it( "should not include the '?' char if it is at the end of the URL", function() {
-					var result = autolinker.link( "Joe went to yahoo.com? today" );
-					expect( result ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>? today' );
+				it( "should not include [?!:,.;] chars if at the end of the URL", function() {
+					var result1 = autolinker.link( "Joe went to yahoo.com? today" );
+					expect( result1 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>? today' );
+					var result2 = autolinker.link( "Joe went to yahoo.com! today" );
+					expect( result2 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>! today' );
+					var result3 = autolinker.link( "Joe went to yahoo.com: today" );
+					expect( result3 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>: today' );
+					var result4 = autolinker.link( "Joe went to yahoo.com, today" );
+					expect( result4 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>, today' );
+					var result5 = autolinker.link( "Joe went to yahoo.com. today" );
+					expect( result5 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>. today' );
+					var result6 = autolinker.link( "Joe went to yahoo.com; today" );
+					expect( result6 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>; today' );
+				} );
+
+				it( "should exclude invalid chars after TLD", function() {
+					var result1 = autolinker.link( "Joe went to yahoo.com's today" );
+					expect( result1 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>\'s today' );
+					var result2 = autolinker.link( "Joe went to yahoo.com/foo's today" );
+					expect( result2 ).toBe( 'Joe went to <a href="http://yahoo.com/foo\'s">yahoo.com/foo\'s</a> today' );
+					var result3 = autolinker.link( "Joe went to yahoo.com's/foo today" );
+					expect( result3 ).toBe( 'Joe went to <a href="http://yahoo.com">yahoo.com</a>\'s/foo today' );
+				} );
+
+				it( "should automatically link a URL with accented characters", function() {
+					var result = autolinker.link( "Joe went to mañana.com today." );
+					expect( result ).toBe( 'Joe went to <a href="http://mañana.com">mañana.com</a> today.' );
 				} );
 
 			} );
@@ -737,6 +835,18 @@ describe( "Autolinker", function() {
 			} );
 
 
+			it( "should automatically link an email address with accented characters", function() {
+				var result = autolinker.link( "Joe's email is mañana@mañana.com" );
+				expect( result ).toBe( 'Joe\'s email is <a href="mailto:mañana@mañana.com">mañana@mañana.com</a>' );
+			} );
+
+
+			it( "should automatically link an email address with cyrillic characters", function() {
+				var result = autolinker.link( "Joe's email is Кириллица@Кириллица.com" );
+				expect( result ).toBe( 'Joe\'s email is <a href="mailto:Кириллица@Кириллица.com">Кириллица@Кириллица.com</a>' );
+			} );
+
+
 			it( "should NOT automatically link any old word with an @ character in it", function() {
 				var result = autolinker.link( "Hi there@stuff" );
 				expect( result ).toBe( 'Hi there@stuff' );
@@ -748,6 +858,12 @@ describe( "Autolinker", function() {
 		describe( "twitter handle linking", function() {
 
 			it( "should automatically link a twitter handle which is the only thing in the string", function() {
+				var result = autolinker.link( "@joe" );
+				expect( result ).toBe( '<a href="https://twitter.com/joe">@joe</a>' );
+			} );
+
+
+			it( "should automatically link a twitter handle with underscores in it", function() {
 				var result = autolinker.link( "@joe_the_man12" );
 				expect( result ).toBe( '<a href="https://twitter.com/joe_the_man12">@joe_the_man12</a>' );
 			} );
@@ -800,6 +916,30 @@ describe( "Autolinker", function() {
 				expect( result ).toBe( '<a href="https://twitter.com/GREG">@GREG</a> is tweeting <a href="https://twitter.com/JOE">@JOE</a> with <a href="https://twitter.com/JOSH">@JOSH</a>' );
 			} );
 
+
+			// NOTE: Twitter itself does not accept cyrillic characters, but
+			// other services might so linking them anyway
+			it( "should automatically link username handles with accented characters", function() {
+				var result = autolinker.link( "Hello @mañana how are you?" );
+				expect( result ).toBe( 'Hello <a href="https://twitter.com/mañana">@mañana</a> how are you?' );
+			} );
+
+
+			// NOTE: Twitter itself does not accept cyrillic characters, but
+			// other services might so linking them anyway
+			it( "should automatically link username handles with cyrillic characters", function() {
+				var result = autolinker.link( "Hello @Кириллица how are you?" );
+				expect( result ).toBe( 'Hello <a href="https://twitter.com/Кириллица">@Кириллица</a> how are you?' );
+			} );
+
+
+			it( "should NOT automatically link a username that is actually part of an email address **when email address linking is turned off**", function() {
+				var noUsernameAutolinker = new Autolinker( { email: false, twitter: true, newWindow: false } ),
+				    result = noUsernameAutolinker.link( "asdf@asdf.com" );
+
+				expect( result ).toBe( 'asdf@asdf.com' );
+			} );
+
 		} );
 
 
@@ -815,7 +955,7 @@ describe( "Autolinker", function() {
 
 
 			it( "should automatically link an international phone number", function() {
-				expect( autolinker.link( "+1-541-754-3010" ) ).toBe(  '<a href="tel:15417543010">+1-541-754-3010</a>' );
+				expect( autolinker.link( "+1-541-754-3010" ) ).toBe(  '<a href="tel:+15417543010">+1-541-754-3010</a>' );
 				expect( autolinker.link( "1-541-754-3010" ) ).toBe(   '<a href="tel:15417543010">1-541-754-3010</a>' );
 				expect( autolinker.link( "1 (541) 754-3010" ) ).toBe( '<a href="tel:15417543010">1 (541) 754-3010</a>' );
 				expect( autolinker.link( "1.541.754.3010" ) ).toBe(   '<a href="tel:15417543010">1.541.754.3010</a>' );
@@ -845,16 +985,24 @@ describe( "Autolinker", function() {
 				expect( autolinker.link( "15417543010" ) ).toBe( '15417543010' );
 			} );
 
+			it( "should NOT automatically link numbers when there are non-space empty characters (such as newlines) in between", function() {
+				expect( autolinker.link( "555 666  7777" ) ).toBe( '555 666  7777' );
+				expect( autolinker.link( "555	666 7777" ) ).toBe( '555	666 7777' );
+				expect( autolinker.link( "555\n666 7777" ) ).toBe( '555\n666 7777' );
+			} );
+
 		} );
 
 
 		describe( "hashtag linking", function() {
 			var twitterHashtagAutolinker,
-			    facebookHashtagAutolinker;
+			    facebookHashtagAutolinker,
+			    instagramHashtagAutolinker;
 
 			beforeEach( function() {
 				twitterHashtagAutolinker = new Autolinker( { hashtag: 'twitter', newWindow: false } );
 				facebookHashtagAutolinker = new Autolinker( { hashtag: 'facebook', newWindow: false } );
+				instagramHashtagAutolinker = new Autolinker( { hashtag: 'instagram', newWindow: false } );
 			} );
 
 
@@ -883,6 +1031,12 @@ describe( "Autolinker", function() {
 				expect( result ).toBe( '<a href="https://www.facebook.com/hashtag/test">#test</a>' );
 			} );
 
+			it( "should automatically link hashtags to instagram when the `hashtag` option is 'instagram'", function() {
+				var result = instagramHashtagAutolinker.link( "#test" );
+
+				expect( result ).toBe( '<a href="https://instagram.com/explore/tags/test">#test</a>' );
+			} );
+
 
 			it( "should automatically link hashtags which are part of a full string", function() {
 				var result = twitterHashtagAutolinker.link( "my hashtag is #test these days" );
@@ -891,10 +1045,50 @@ describe( "Autolinker", function() {
 			} );
 
 
+			it( "should automatically link hashtags that are longer than 15 chars (original version of hashtag implementation limited to 15 chars, now it's at 139 chars)", function() {
+				var result = twitterHashtagAutolinker.link( "my hashtag is #AHashtagThatIsWorthyOfMordorAndStuff these days" );
+
+				expect( result ).toBe( 'my hashtag is <a href="https://twitter.com/hashtag/AHashtagThatIsWorthyOfMordorAndStuff">#AHashtagThatIsWorthyOfMordorAndStuff</a> these days' );
+			} );
+
+
+			it( "should automatically link a hashtag with underscores", function() {
+				var result = twitterHashtagAutolinker.link( "Yay, #hello_world" );
+				expect( result ).toBe( 'Yay, <a href="https://twitter.com/hashtag/hello_world">#hello_world</a>' );
+			} );
+
+
+			it( "should automatically link a hashtag with accented characters", function() {
+				var result = twitterHashtagAutolinker.link( "Yay, #mañana" );
+				expect( result ).toBe( 'Yay, <a href="https://twitter.com/hashtag/mañana">#mañana</a>' );
+			} );
+
+
+			it( "should automatically link a hashtag with cyrillic characters", function() {
+				var result = twitterHashtagAutolinker.link( "Yay, #Кириллица" );
+				expect( result ).toBe( 'Yay, <a href="https://twitter.com/hashtag/Кириллица">#Кириллица</a>' );
+			} );
+
+
 			it( "should NOT automatically link a hashtag when the '#' belongs to part of another string", function() {
 				var result = twitterHashtagAutolinker.link( "test as#df test" );
 
 				expect( result ).toBe( 'test as#df test' );
+			} );
+
+
+			it( "should NOT automatically link a hashtag that is actually a named anchor within a URL", function() {
+				var result = twitterHashtagAutolinker.link( "http://google.com/#link" );
+
+				expect( result ).toBe( '<a href="http://google.com/#link">google.com/#link</a>' );
+			} );
+
+
+			it( "should NOT automatically link a hashtag that is actually a named anchor within a URL **when URL linking is turned off**", function() {
+				var noUrlTwitterHashtagAutolinker = new Autolinker( { urls: false, hashtag: 'twitter', newWindow: false } ),
+				    result = noUrlTwitterHashtagAutolinker.link( "http://google.com/#link" );
+
+				expect( result ).toBe( 'http://google.com/#link' );
 			} );
 
 		} );
@@ -938,6 +1132,12 @@ describe( "Autolinker", function() {
 			it( "should NOT automatically link a URL found within the inner text of a pre-existing anchor tag, but link others", function() {
 				var result = autolinker.link( '<p>Joe went to google.com, <a href="http://www.yahoo.com">yahoo.com</a>, and weather.com</p> yesterday.' );
 				expect( result ).toBe( '<p>Joe went to <a href="http://google.com">google.com</a>, <a href="http://www.yahoo.com">yahoo.com</a>, and <a href="http://weather.com">weather.com</a></p> yesterday.' );
+			} );
+
+
+			it( "should NOT automatically link an image tag with incorrect HTML attribute spacing", function() {
+				var result = autolinker.link( '<img src="https://ssl.gstatic.com/welcome_calendar.png" alt="Calendar" style="display:block;"width="129"height="129"/>' );
+				expect( result ).toBe( '<img src="https://ssl.gstatic.com/welcome_calendar.png" alt="Calendar" style="display:block;"width="129"height="129"/>' );
 			} );
 
 
@@ -1216,9 +1416,9 @@ describe( "Autolinker", function() {
 			} );
 
 
-			it( "should add target=\"_blank\" when the 'newWindow' option is set to true", function() {
+			it( "should add target=\"_blank\" and rel=\"noopener noreferrer\" when the 'newWindow' option is set to true (see https://mathiasbynens.github.io/rel-noopener/ about the 'rel' attribute, which prevents a potential phishing attack)", function() {
 				var result = Autolinker.link( "Test http://url.com", { newWindow: true } );
-				expect( result ).toBe( 'Test <a href="http://url.com" target="_blank">url.com</a>' );
+				expect( result ).toBe( 'Test <a href="http://url.com" target="_blank" rel="noopener noreferrer">url.com</a>' );
 			} );
 
 		} );
@@ -1244,6 +1444,21 @@ describe( "Autolinker", function() {
 			} );
 
 
+			it( 'should leave the original text as-is when the `stripPrefix` option is `false`', function() {
+				var result1 = Autolinker.link( 'My url.com', { stripPrefix: false, newWindow: false } );
+				expect( result1 ).toBe( 'My <a href="http://url.com">url.com</a>' );
+
+				var result2 = Autolinker.link( 'My www.url.com', { stripPrefix: false, newWindow: false } );
+				expect( result2 ).toBe( 'My <a href="http://www.url.com">www.url.com</a>' );
+
+				var result3 = Autolinker.link( 'My http://url.com', { stripPrefix: false, newWindow: false } );
+				expect( result3 ).toBe( 'My <a href="http://url.com">http://url.com</a>' );
+
+				var result4 = Autolinker.link( 'My http://www.url.com', { stripPrefix: false, newWindow: false } );
+				expect( result4 ).toBe( 'My <a href="http://www.url.com">http://www.url.com</a>' );
+			} );
+
+
 			it( "should remove the prefix by default", function() {
 				var result = Autolinker.link( "Test http://www.url.com", { newWindow: false } );
 				expect( result ).toBe( 'Test <a href="http://www.url.com">url.com</a>' );
@@ -1254,63 +1469,186 @@ describe( "Autolinker", function() {
 
 		describe( "`truncate` option", function() {
 
-			it( "should truncate long a url/email/twitter to the given number of characters with the 'truncate' option specified", function() {
-				var result = Autolinker.link( "Test http://url.com/with/path", { truncate: 12, newWindow: false } );
+			describe( 'number form', function() {
 
-				expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/wi..</a>' );
+				it( "should truncate long a url/email/twitter to the given number of characters with the 'truncate' option specified", function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: 12, newWindow: false } );
+
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/wi..</a>' );
+				} );
+
+
+				it( "should leave a url/email/twitter alone if the length of the url is exactly equal to the length of the 'truncate' option", function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: 'url.com/with/path'.length, newWindow: false } );  // the exact length of the link
+
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/with/path</a>' );
+				} );
+
+
+				it( "should leave a url/email/twitter alone if it does not exceed the given number of characters provided in the 'truncate' option", function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: 25, newWindow: false } );  // just a random high number
+
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/with/path</a>' );
+				} );
+
 			} );
 
 
-			it( "should leave a url/email/twitter alone if the length of the url is exactly equal to the length of the 'truncate' option", function() {
-				var result = Autolinker.link( "Test http://url.com/with/path", { truncate: 'url.com/with/path'.length, newWindow: false } );  // the exact length of the link
+			describe( 'object form (with `length` and `location` properties)', function() {
 
-				expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/with/path</a>' );
-			} );
+				it( 'should default the `location` to "end" if it is not provided', function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: { length: 12 }, newWindow: false } );
+
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/wi..</a>' );
+				} );
 
 
-			it( "should leave a url/email/twitter alone if it does not exceed the given number of characters provided in the 'truncate' option", function() {
-				var result = Autolinker.link( "Test http://url.com/with/path", { truncate: 25, newWindow: false } );  // just a random high number
+				it( 'should truncate at the end when `location: "end"` is specified', function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: { length: 12, location: 'end' }, newWindow: false } );
 
-				expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/with/path</a>' );
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/wi..</a>' );
+				} );
+
+
+				it( 'should truncate in the middle when `location: "middle"` is specified', function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: { length: 12, location: 'middle' }, newWindow: false } );
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.c../path</a>' );
+				} );
+
+
+				it( 'should truncate according to the "smart" truncation rules when `location: "smart"` is specified', function() {
+					var result = Autolinker.link( "Test http://url.com/with/path", { truncate: { length: 12, location: 'smart' }, newWindow: false } );
+					expect( result ).toBe( 'Test <a href="http://url.com/with/path">url.com/w..h</a>' );
+				} );
+
 			} );
 
 		} );
+
 
 		describe( "`className` option", function() {
 
 			it( "should not add className when the 'className' option is not a string with at least 1 character", function() {
-				var result = Autolinker.link( "Test http://url.com" );
-				expect( result ).toBe( 'Test <a href="http://url.com" target="_blank">url.com</a>' );
+				var result = Autolinker.link( "Test http://url.com", { newWindow: false } );
+				expect( result ).toBe( 'Test <a href="http://url.com">url.com</a>' );
 
-				result = Autolinker.link( "Test http://url.com", { className: null } );
-				expect( result ).toBe( 'Test <a href="http://url.com" target="_blank">url.com</a>' );
+				result = Autolinker.link( "Test http://url.com", { newWindow: false, className: null } );
+				expect( result ).toBe( 'Test <a href="http://url.com">url.com</a>' );
 
-				result = Autolinker.link( "Test http://url.com", { className: "" } );
-				expect( result ).toBe( 'Test <a href="http://url.com" target="_blank">url.com</a>' );
+				result = Autolinker.link( "Test http://url.com", { newWindow: false, className: "" } );
+				expect( result ).toBe( 'Test <a href="http://url.com">url.com</a>' );
 			} );
 
 
 			it( "should add className to links", function() {
-				var result = Autolinker.link( "Test http://url.com", { className: 'myLink' } );
-				expect( result ).toBe( 'Test <a href="http://url.com" class="myLink myLink-url" target="_blank">url.com</a>' );
+				var result = Autolinker.link( "Test http://url.com", { newWindow: false, className: 'myLink' } );
+				expect( result ).toBe( 'Test <a href="http://url.com" class="myLink myLink-url">url.com</a>' );
 			} );
 
 
 			it( "should add className to email links", function() {
-				var result = Autolinker.link( "Iggy's email is mr@iggypop.com", { email: true, className: 'myLink' } );
-				expect( result ).toBe( 'Iggy\'s email is <a href="mailto:mr@iggypop.com" class="myLink myLink-email" target="_blank">mr@iggypop.com</a>' );
+				var result = Autolinker.link( "Iggy's email is mr@iggypop.com", { newWindow: false, email: true, className: 'myLink' } );
+				expect( result ).toBe( 'Iggy\'s email is <a href="mailto:mr@iggypop.com" class="myLink myLink-email">mr@iggypop.com</a>' );
 			} );
 
 
 			it( "should add className to twitter links", function() {
-				var result = Autolinker.link( "hi from @iggypopschest", { twitter: true, className: 'myLink' } );
-				expect( result ).toBe( 'hi from <a href="https://twitter.com/iggypopschest" class="myLink myLink-twitter" target="_blank">@iggypopschest</a>' );
+				var result = Autolinker.link( "hi from @iggypopschest", { newWindow: false, twitter: true, className: 'myLink' } );
+				expect( result ).toBe( 'hi from <a href="https://twitter.com/iggypopschest" class="myLink myLink-twitter">@iggypopschest</a>' );
 			} );
 
 		} );
 
 
-		describe( "`urls`, `email`, `phone`, and `twitter` options", function() {
+		describe( '`urls` option', function() {
+			var str = 'http://google.com www.google.com google.com';  // the 3 types: scheme URL, www URL, and TLD (top level domain) URL
+
+
+			it( 'should link all 3 types if the `urls` option is `true`', function() {
+				var result = Autolinker.link( str, { newWindow: false, stripPrefix: false, urls: true } );
+
+				expect( result ).toBe( [
+					'<a href="http://google.com">http://google.com</a>',
+					'<a href="http://www.google.com">www.google.com</a>',
+					'<a href="http://google.com">google.com</a>'
+				].join( ' ' ) );
+			} );
+
+
+			it( 'should not link any of the 3 types if the `urls` option is `false`', function() {
+				var result = Autolinker.link( str, { newWindow: false, stripPrefix: false, urls: false } );
+
+				expect( result ).toBe( [
+					'http://google.com',
+					'www.google.com',
+					'google.com'
+				].join( ' ' ) );
+			} );
+
+
+			it( 'should only link scheme URLs if `schemeMatches` is the only `urls` option that is `true`', function() {
+				var result = Autolinker.link( str, { newWindow: false, stripPrefix: false, urls: {
+					schemeMatches : true,
+					wwwMatches    : false,
+					tldMatches    : false
+				} } );
+
+				expect( result ).toBe( [
+					'<a href="http://google.com">http://google.com</a>',
+					'www.google.com',
+					'google.com'
+				].join( ' ' ) );
+			} );
+
+
+			it( 'should only link www URLs if `wwwMatches` is the only `urls` option that is `true`', function() {
+				var result = Autolinker.link( str, { newWindow: false, stripPrefix: false, urls: {
+					schemeMatches : false,
+					wwwMatches    : true,
+					tldMatches    : false
+				} } );
+
+				expect( result ).toBe( [
+					'http://google.com',
+					'<a href="http://www.google.com">www.google.com</a>',
+					'google.com'
+				].join( ' ' ) );
+			} );
+
+
+			it( 'should only link TLD URLs if `tldMatches` is the only `urls` option that is `true`', function() {
+				var result = Autolinker.link( str, { newWindow: false, stripPrefix: false, urls: {
+					schemeMatches : false,
+					wwwMatches    : false,
+					tldMatches    : true
+				} } );
+
+				expect( result ).toBe( [
+					'http://google.com',
+					'www.google.com',
+					'<a href="http://google.com">google.com</a>'
+				].join( ' ' ) );
+			} );
+
+
+			it( 'should link both scheme and www matches, but not TLD matches when `tldMatches` is the only option that is `false`', function() {
+				var result = Autolinker.link( str, { newWindow: false, stripPrefix: false, urls: {
+					schemeMatches : true,
+					wwwMatches    : true,
+					tldMatches    : false
+				} } );
+
+				expect( result ).toBe( [
+					'<a href="http://google.com">http://google.com</a>',
+					'<a href="http://www.google.com">www.google.com</a>',
+					'google.com'
+				].join( ' ' ) );
+			} );
+
+		} );
+
+
+		describe( "`urls` (as boolean), `email`, `phone`, and `twitter` options", function() {
 			var inputStr = [
 				"Website: asdf.com",
 				"Email: asdf@asdf.com",
@@ -1429,6 +1767,23 @@ describe( "Autolinker", function() {
 			} );
 
 
+			it( "should populate a HashtagMatch object with the appropriate properties", function() {
+				var replaceFnCallCount = 0;
+				var result = Autolinker.link( "Hashtag: #myHashtag ", {  // purposeful trailing space
+					hashtag: 'twitter',
+					replaceFn : function( autolinker, match ) {
+						replaceFnCallCount++;
+
+						expect( match.getType() ).toBe( 'hashtag' );
+						expect( match.getMatchedText() ).toBe( '#myHashtag' );
+						expect( match.getHashtag() ).toBe( 'myHashtag' );
+					}
+				} );
+
+				expect( replaceFnCallCount ).toBe( 1 );  // make sure the replaceFn was called
+			} );
+
+
 			it( "should populate a TwitterMatch object with the appropriate properties", function() {
 				var replaceFnCallCount = 0;
 				var result = Autolinker.link( "Twitter: @myTwitter ", {  // purposeful trailing space
@@ -1499,7 +1854,7 @@ describe( "Autolinker", function() {
 					newWindow : false,
 
 					replaceFn : function( autolinker, match ) {
-						var tag = autolinker.getTagBuilder().build( match );
+						var tag = match.buildTag();
 						tag.setInnerHtml( 'asdf!' );  // just to check that we're replacing with the returned `tag` instance
 						return tag;
 					}
@@ -1514,7 +1869,7 @@ describe( "Autolinker", function() {
 					newWindow : false,
 
 					replaceFn : function( autolinker, match ) {
-						var tag = autolinker.getTagBuilder().build( match );
+						var tag = match.buildTag();
 						tag.addClass( 'test' );
 						tag.addClass( 'test2' );
 						tag.setAttr( 'rel', 'nofollow' );
@@ -1566,6 +1921,141 @@ describe( "Autolinker", function() {
 
 			} );
 
+		} );
+
+	} );
+
+
+	describe( 'all match types tests', function() {
+		var testCases = {
+			schemeUrl : {
+				unlinked : 'http://google.com/path?param1=value1&param2=value2#hash',
+				linked   : '<a href="http://google.com/path?param1=value1&param2=value2#hash">http://google.com/path?param1=value1&param2=value2#hash</a>'
+			},
+			wwwUrl : {
+				unlinked : 'www.google.com/path?param1=value1&param2=value2#hash',
+				linked   : '<a href="http://www.google.com/path?param1=value1&param2=value2#hash">www.google.com/path?param1=value1&param2=value2#hash</a>'
+			},
+			tldUrl : {
+				unlinked : 'google.com/path?param1=value1&param2=value2#hash',
+				linked   : '<a href="http://google.com/path?param1=value1&param2=value2#hash">google.com/path?param1=value1&param2=value2#hash</a>'
+			},
+			email : {
+				unlinked : 'asdf@asdf.com',
+				linked   : '<a href="mailto:asdf@asdf.com">asdf@asdf.com</a>'
+			},
+			twitter : {
+				unlinked : '@asdf',
+				linked   : '<a href="https://twitter.com/asdf">@asdf</a>'
+			},
+			phone : {
+				unlinked : '123-456-7890',
+				linked   : '<a href="tel:1234567890">123-456-7890</a>'
+			},
+			hashtag : {
+				unlinked : '#Winning',
+				linked   : '<a href="https://twitter.com/hashtag/Winning">#Winning</a>'
+			}
+		};
+
+		var numTestCaseKeys = Object.keys( testCases ).length;
+
+		var paragraphTpl = _.template( [
+			'Check link 1: <%= schemeUrl %>.',
+			'Check link 2: <%= wwwUrl %>.',
+			'Check link 3: <%= tldUrl %>.',
+			'My email is: <%= email %>.',
+			'My twitter username is <%= twitter %>.',
+			'My phone number is <%= phone %>.',
+			'Hashtag <%= hashtag %>.'
+		].join( '\n' ) );
+
+		var sourceParagraph = paragraphTpl( {
+			schemeUrl : testCases.schemeUrl.unlinked,
+			wwwUrl    : testCases.wwwUrl.unlinked,
+			tldUrl    : testCases.tldUrl.unlinked,
+			email     : testCases.email.unlinked,
+			twitter   : testCases.twitter.unlinked,
+			phone     : testCases.phone.unlinked,
+			hashtag   : testCases.hashtag.unlinked
+		} );
+
+
+
+		it( 'should replace matches appropriately in a paragraph of text, using a variety of enabled matchers. Want to make sure that when one match type is disabled (such as emails), that other ones don\'t accidentally link part of them (such as from the url matcher)', function() {
+			// We're going to run through every combination of matcher settings
+			// possible.
+			// 7 different settings and two possibilities for each (on or off)
+			// is 2^7 == 128 settings possibilities
+			for( var i = 0, len = Math.pow( 2, numTestCaseKeys ); i < len; i++ ) {
+				var cfg = {
+					schemeMatches : !!( i & parseInt( '00000001', 2 ) ),
+				    wwwMatches    : !!( i & parseInt( '00000010', 2 ) ),
+				    tldMatches    : !!( i & parseInt( '00000100', 2 ) ),
+				    email         : !!( i & parseInt( '00001000', 2 ) ),
+				    twitter       : !!( i & parseInt( '00010000', 2 ) ),
+				    phone         : !!( i & parseInt( '00100000', 2 ) ),
+				    hashtag       : !!( i & parseInt( '01000000', 2 ) ) ? 'twitter' : false
+				};
+
+				var autolinker = new Autolinker( {
+					urls        : {
+						schemeMatches : cfg.schemeMatches,
+						wwwMatches    : cfg.wwwMatches,
+						tldMatches    : cfg.tldMatches
+					},
+					email       : cfg.email,
+					twitter     : cfg.twitter,
+					phone       : cfg.phone,
+					hashtag     : cfg.hashtag,
+
+					newWindow   : false,
+					stripPrefix : false
+				} );
+
+				var result = autolinker.link( sourceParagraph ),
+				    resultLines = result.split( '\n' ),  // splitting line-by-line to make it easier to see where a failure is
+				    expectedLines = generateExpectedLines( cfg );
+
+				expect( resultLines.length ).toBe( expectedLines.length );  // just in case
+
+				for( var j = 0, jlen = expectedLines.length; j < jlen; j++ ) {
+					if( resultLines[ j ] !== expectedLines[ j ] ) {
+						var errorMsg = generateErrMsg( resultLines[ j ], expectedLines[ j ], cfg );
+						throw new Error( errorMsg );
+					}
+				}
+			}
+
+
+			function generateExpectedLines( cfg ) {
+				var expectedLines = paragraphTpl( {
+					schemeUrl : cfg.schemeMatches ? testCases.schemeUrl.linked : testCases.schemeUrl.unlinked,
+					wwwUrl    : cfg.wwwMatches    ? testCases.wwwUrl.linked    : testCases.wwwUrl.unlinked,
+					tldUrl    : cfg.tldMatches    ? testCases.tldUrl.linked    : testCases.tldUrl.unlinked,
+					email     : cfg.email         ? testCases.email.linked     : testCases.email.unlinked,
+					twitter   : cfg.twitter       ? testCases.twitter.linked   : testCases.twitter.unlinked,
+					phone     : cfg.phone         ? testCases.phone.linked     : testCases.phone.unlinked,
+					hashtag   : cfg.hashtag       ? testCases.hashtag.linked   : testCases.hashtag.unlinked
+				} );
+
+				return expectedLines.split( '\n' );  // splitting line-by-line to make it easier to see where a failure is
+			}
+
+
+			function generateErrMsg( resultLine, expectedLine, cfg ) {
+				var errorMsg = [
+				    'Expected: \'' + resultLine + '\' to be \'' + expectedLine + '\'\n'
+				];
+
+				errorMsg.push( '{' );
+				_.forOwn( cfg, function( value, key ) {
+					errorMsg.push( '\t' + key + ': ' + value );
+				} );
+				errorMsg.push( '}' );
+
+				return errorMsg.join( '\n' );
+			}
 		} );
 
 	} );

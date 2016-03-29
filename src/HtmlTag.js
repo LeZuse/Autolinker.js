@@ -46,7 +46,7 @@
  *
  *     var html = Autolinker.link( "Test google.com", {
  *         replaceFn : function( autolinker, match ) {
- *             var tag = autolinker.getTagBuilder().build( match );  // returns an {@link Autolinker.HtmlTag} instance, configured with the Match's href and anchor text
+ *             var tag = match.buildTag();  // returns an {@link Autolinker.HtmlTag} instance, configured with the Match's href and anchor text
  *             tag.setAttr( 'rel', 'nofollow' );
  *
  *             return tag;
@@ -170,7 +170,7 @@ Autolinker.HtmlTag = Autolinker.Util.extend( Object, {
 	/**
 	 * Retrieves an attribute from the HtmlTag. If the attribute does not exist, returns `undefined`.
 	 *
-	 * @param {String} name The attribute name to retrieve.
+	 * @param {String} attrName The attribute name to retrieve.
 	 * @return {String} The attribute's value, or `undefined` if it does not exist on the HtmlTag.
 	 */
 	getAttr : function( attrName ) {

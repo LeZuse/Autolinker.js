@@ -12,7 +12,7 @@
 Autolinker.match.Hashtag = Autolinker.Util.extend( Autolinker.match.Match, {
 
 	/**
-	 * @cfg {String} serviceName (required)
+	 * @cfg {String} serviceName
 	 *
 	 * The service to point hashtag matches to. See {@link Autolinker#hashtag}
 	 * for available values.
@@ -26,6 +26,24 @@ Autolinker.match.Hashtag = Autolinker.Util.extend( Autolinker.match.Match, {
 
 
 	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		// TODO: if( !serviceName ) throw new Error( '`serviceName` cfg required' );
+		if( !cfg.hashtag ) throw new Error( '`hashtag` cfg required' );
+		// @endif
+
+		this.serviceName = cfg.serviceName;
+		this.hashtag = cfg.hashtag;
+	},
+
+
+	/**
 	 * Returns the type of match that this class represents.
 	 *
 	 * @return {String}
@@ -36,7 +54,18 @@ Autolinker.match.Hashtag = Autolinker.Util.extend( Autolinker.match.Match, {
 
 
 	/**
-	 * Returns the matched hashtag.
+	 * Returns the configured {@link #serviceName} to point the Hashtag to.
+	 * Ex: 'facebook', 'twitter'.
+	 *
+	 * @return {String}
+	 */
+	getServiceName : function() {
+		return this.serviceName;
+	},
+
+
+	/**
+	 * Returns the matched hashtag, without the '#' character.
 	 *
 	 * @return {String}
 	 */
@@ -59,6 +88,8 @@ Autolinker.match.Hashtag = Autolinker.Util.extend( Autolinker.match.Match, {
 				return 'https://twitter.com/hashtag/' + hashtag;
 			case 'facebook' :
 				return 'https://www.facebook.com/hashtag/' + hashtag;
+			case 'instagram' :
+				return 'https://instagram.com/explore/tags/' + hashtag;
 
 			default :  // Shouldn't happen because Autolinker's constructor should block any invalid values, but just in case.
 				throw new Error( 'Unknown service name to point hashtag to: ', serviceName );

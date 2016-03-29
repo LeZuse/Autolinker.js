@@ -12,10 +12,41 @@
 Autolinker.match.Phone = Autolinker.Util.extend( Autolinker.match.Match, {
 
 	/**
-	 * @cfg {String} number (required)
+	 * @protected
+	 * @property {String} number (required)
 	 *
-	 * The phone number that was matched.
+	 * The phone number that was matched, without any delimiter characters.
+	 *
+	 * Note: This is a string to allow for prefixed 0's.
 	 */
+
+	/**
+	 * @protected
+	 * @property  {Boolean} plusSign (required)
+	 *
+	 * `true` if the matched phone number started with a '+' sign. We'll include
+	 * it in the `tel:` URL if so, as this is needed for international numbers.
+	 *
+	 * Ex: '+1 (123) 456 7879'
+	 */
+
+
+	/**
+	 * @constructor
+	 * @param {Object} cfg The configuration properties for the Match
+	 *   instance, specified in an Object (map).
+	 */
+	constructor : function( cfg ) {
+		Autolinker.match.Match.prototype.constructor.call( this, cfg );
+
+		// @if DEBUG
+		if( !cfg.number ) throw new Error( '`number` cfg required' );
+		if( cfg.plusSign == null ) throw new Error( '`plusSign` cfg required' );
+		// @endif
+
+		this.number = cfg.number;
+		this.plusSign = cfg.plusSign;
+	},
 
 
 	/**
@@ -29,7 +60,10 @@ Autolinker.match.Phone = Autolinker.Util.extend( Autolinker.match.Match, {
 
 
 	/**
-	 * Returns the phone number that was matched.
+	 * Returns the phone number that was matched as a string, without any
+	 * delimiter characters.
+	 *
+	 * Note: This is a string to allow for prefixed 0's.
 	 *
 	 * @return {String}
 	 */
@@ -44,7 +78,7 @@ Autolinker.match.Phone = Autolinker.Util.extend( Autolinker.match.Match, {
 	 * @return {String}
 	 */
 	getAnchorHref : function() {
-		return 'tel:' + this.number;
+		return 'tel:' + ( this.plusSign ? '+' : '' ) + this.number;
 	},
 
 
